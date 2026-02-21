@@ -138,6 +138,53 @@ describe("delivery packaging validation", () => {
 });
 
 describe("delivery packaging compatibility", () => {
+  it("packages citationless output and does not require grounding report", () => {
+    const citationlessOutput = {
+      ingest_run_id: "run-citationless",
+      repo_ref: "acme/widget",
+      commit_sha: COMMIT_SHA,
+      section_count: 6,
+      subsection_count: 18,
+      total_korean_chars: 51_000,
+      source_doc_count: 2,
+      trend_fact_count: 1,
+      draft: {
+        artifactType: "wiki-draft",
+        repoFullName: "acme/widget",
+        commitSha: COMMIT_SHA,
+        generatedAt: "2026-02-22T09:00:00.000Z",
+        overviewKo:
+          "이 위키는 입문자 관점에서 프로젝트 구조를 설명하고 최근 릴리스 트렌드를 함께 요약합니다. 캐시 계층(Cache Layer)과 구성 파일 경로를 연결해 학습 순서를 제시합니다.",
+        sourceDocs: [
+          { sourceId: "src-1", path: "README.md" },
+          { sourceId: "src-2", path: "docs/getting-started.md" },
+        ],
+        trendFacts: [
+          {
+            factId: "trend-1",
+            category: "release",
+            summaryKo: "최근 180일 릴리스 빈도가 증가하며 안정화 패치 비중이 높습니다.",
+          },
+        ],
+        sections: Array.from({ length: 6 }).map((_, sectionIndex) => ({
+          sectionId: `sec-${sectionIndex + 1}`,
+          titleKo: `섹션 ${sectionIndex + 1}`,
+          summaryKo: "입문자 관점으로 구조를 설명하고 관련 소스 경로를 연결합니다.",
+          subsections: Array.from({ length: 3 }).map((__, subsectionIndex) => ({
+            sectionId: `sec-${sectionIndex + 1}`,
+            subsectionId: `sub-${sectionIndex + 1}-${subsectionIndex + 1}`,
+            titleKo: `하위 섹션 ${sectionIndex + 1}-${subsectionIndex + 1}`,
+            bodyKo:
+              `README.md 및 __devport__/trends/releases.json 경로를 기준으로 실행 흐름을 설명합니다. ` +
+              `(근거: sec-${sectionIndex + 1}, sub-${subsectionIndex + 1})`,
+          })),
+        })),
+      },
+    };
+
+    expect(() => packageAcceptedOutputsForDelivery([citationlessOutput as never])).not.toThrow();
+  });
+
   it("rejects section missing architecture mermaid block", () => {
     const snapshotPath = mkdtempSync(join(tmpdir(), "devport-snapshot-"));
     mkdirSync(join(snapshotPath, "__devport__/trends"), { recursive: true });
@@ -261,10 +308,10 @@ describe("delivery packaging compatibility", () => {
     expect(first.artifacts[0].glossary.length).toBeGreaterThan(0);
   });
 
-  it("blocks packaging when gnd-04 strict findings exist", () => {
+  it("packages in strict mode without grounding gate dependency", () => {
     const lowQuality = createAcceptedOutput({ ingestRunId: "run-strict" });
-    lowQuality.draft.claims[0].statementKo =
-      "보안 키 회전 주기를 인프라 정책 엔진과 연동해 실시간으로 결정합니다.";
+    lowQuality.source_doc_count = 1;
+    lowQuality.trend_fact_count = 0;
 
     expect(() =>
       packageAcceptedOutputsForDelivery([lowQuality], {
@@ -279,6 +326,6 @@ describe("delivery packaging compatibility", () => {
         generatedAt: "2026-02-19T11:11:00.000Z",
         qualityGateLevel: "strict",
       }),
-    ).toThrow(/OUT-04 packaging blocked/i);
+    ).not.toThrow();
   });
 });

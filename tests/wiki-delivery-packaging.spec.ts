@@ -185,6 +185,49 @@ describe("delivery packaging compatibility", () => {
     expect(() => packageAcceptedOutputsForDelivery([citationlessOutput as never])).not.toThrow();
   });
 
+  it("does not invoke grounding gates during packaging", () => {
+    const citationlessOutput = {
+      ingest_run_id: "run-no-grounding",
+      repo_ref: "acme/widget",
+      commit_sha: COMMIT_SHA,
+      section_count: 6,
+      subsection_count: 18,
+      total_korean_chars: 51_000,
+      source_doc_count: 1,
+      trend_fact_count: 0,
+      draft: {
+        artifactType: "wiki-draft",
+        repoFullName: "acme/widget",
+        commitSha: COMMIT_SHA,
+        generatedAt: "2026-02-22T09:00:00.000Z",
+        overviewKo:
+          "이 위키는 입문자 관점에서 코드 구조를 설명하며 캐시 계층(Cache Layer)과 실행 흐름을 연결해 제공합니다.",
+        sourceDocs: [{ sourceId: "src-1", path: "README.md" }],
+        sections: Array.from({ length: 6 }).map((_, sectionIndex) => ({
+          sectionId: `sec-${sectionIndex + 1}`,
+          titleKo: `섹션 ${sectionIndex + 1}`,
+          summaryKo: "입문자 중심 설명과 소스 경로 기반 근거를 제공합니다.",
+          subsections: Array.from({ length: 3 }).map((__, subsectionIndex) => ({
+            sectionId: `sec-${sectionIndex + 1}`,
+            subsectionId: `sub-${sectionIndex + 1}-${subsectionIndex + 1}`,
+            titleKo: `하위 섹션 ${sectionIndex + 1}-${subsectionIndex + 1}`,
+            bodyKo:
+              `README.md 경로를 중심으로 모듈 관계를 설명합니다. ` +
+              `(근거: sec-${sectionIndex + 1}, sub-${subsectionIndex + 1})`,
+          })),
+        })),
+      },
+    };
+
+    expect(() =>
+      packageAcceptedOutputsForDelivery([citationlessOutput as never], {
+        qualityGateLevel: "strict",
+        modelId: "gpt-5.3-codex",
+        generatedAt: "2026-02-22T09:10:00.000Z",
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects section missing architecture mermaid block", () => {
     const snapshotPath = mkdtempSync(join(tmpdir(), "devport-snapshot-"));
     mkdirSync(join(snapshotPath, "__devport__/trends"), { recursive: true });

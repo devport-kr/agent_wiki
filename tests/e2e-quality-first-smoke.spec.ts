@@ -1,8 +1,9 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { finalize } from "../src/chunked/finalize";
 import { planSections } from "../src/chunked/plan-sections";
 import { runIngest } from "../src/ingestion/run";
 import type { GitHubResolver } from "../src/ingestion/github";
@@ -141,6 +142,141 @@ function createAcceptedOutput(commitSha: string) {
 }
 
 describe("quality-first e2e smoke", () => {
+  it("finalize reports section/subsection counts without claim/citation counters", async () => {
+    const root = mkdtempSync(join(tmpdir(), "devport-finalize-smoke-"));
+    const sectionOutputPath = join(root, "section-1-output.json");
+
+    const longBody =
+      "README.md 경로와 __devport__/trends/releases.json 경로를 기준으로 실행 흐름을 상세히 설명합니다. " +
+      "입문자 관점에서 호출 순서와 데이터 경계를 단계별로 정리해 이해 부담을 낮춥니다.";
+
+    const sectionOutput = {
+      sectionId: "sec-1",
+      titleKo: "프로젝트 한눈에 보기",
+      summaryKo: "입문자 관점에서 핵심 구조와 실행 흐름을 설명합니다.",
+      sourcePaths: ["README.md", "__devport__/trends/releases.json"],
+      subsections: [
+        {
+          sectionId: "sec-1",
+          subsectionId: "sub-1-1",
+          titleKo: "진입 흐름",
+          bodyKo: `${longBody} (섹션 A)`,
+        },
+        {
+          sectionId: "sec-1",
+          subsectionId: "sub-1-2",
+          titleKo: "핵심 모듈",
+          bodyKo: `${longBody} (섹션 B)`,
+        },
+        {
+          sectionId: "sec-1",
+          subsectionId: "sub-1-3",
+          titleKo: "데이터 경로",
+          bodyKo: `${longBody} (섹션 C)`,
+        },
+      ],
+    };
+
+    writeFileSync(sectionOutputPath, `${JSON.stringify(sectionOutput, null, 2)}\n`, "utf8");
+
+    const session = {
+      sessionId: "session-1",
+      repoFullName: "acme/widget",
+      commitSha: COMMIT_SHA,
+      ingestRunId: "ingest-run-1",
+      planPath: join(root, "plan.json"),
+      startedAt: "2026-02-22T10:00:00.000Z",
+      sections: {
+        "sec-1": {
+          status: "persisted",
+          sectionOutputPath,
+          persistedAt: "2026-02-22T10:01:00.000Z",
+          chunksInserted: 4,
+          claimCount: 0,
+          citationCount: 0,
+          subsectionCount: 3,
+          koreanChars: 1200,
+        },
+      },
+    };
+
+    const plan = {
+      artifactType: "chunked-section-plan",
+      repoFullName: "acme/widget",
+      commitSha: COMMIT_SHA,
+      ingestRunId: "ingest-run-1",
+      snapshotPath: root,
+      generatedAt: "2026-02-22T10:00:00.000Z",
+      overviewKo: "전체 구조를 초심자 관점에서 요약하는 개요입니다.",
+      totalSections: 1,
+      sections: [
+        {
+          sectionId: "sec-1",
+          titleKo: "프로젝트 한눈에 보기",
+          summaryKo: "요약",
+          focusPaths: ["README.md"],
+          subsectionCount: 3,
+          subsections: [
+            {
+              subsectionId: "sub-1-1",
+              titleKo: "진입 흐름",
+              objectiveKo: "진입 흐름 설명",
+              targetEvidenceKinds: ["code"],
+              targetCharacterCount: 3000,
+            },
+            {
+              subsectionId: "sub-1-2",
+              titleKo: "핵심 모듈",
+              objectiveKo: "핵심 모듈 설명",
+              targetEvidenceKinds: ["code"],
+              targetCharacterCount: 3000,
+            },
+            {
+              subsectionId: "sub-1-3",
+              titleKo: "데이터 경로",
+              objectiveKo: "데이터 경로 설명",
+              targetEvidenceKinds: ["docs"],
+              targetCharacterCount: 3000,
+            },
+          ],
+        },
+      ],
+      crossReferences: [],
+    };
+
+    const transactionalQuery = vi.fn(async (sql: string) => {
+      if (sql.includes("SELECT id FROM wiki_drafts")) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes("FROM projects")) {
+          return { rows: [{ id: 1, external_id: "proj-ext-1" }] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(async () => ({
+        query: transactionalQuery,
+        release: vi.fn(),
+      })),
+    };
+
+    const result = await finalize(session as never, plan as never, {
+      pool: pool as never,
+      openai: {} as never,
+      advanceBaseline: false,
+      statePath: join(root, "state.json"),
+    });
+
+    expect((result as { totalClaims?: number }).totalClaims).toBeUndefined();
+    expect((result as { totalCitations?: number }).totalCitations).toBeUndefined();
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("plans beginner-trend sections including architecture and trend section", async () => {
     const snapshotRoot = mkdtempSync(join(tmpdir(), "devport-e2e-quality-first-plan-"));
     const sourceRoot = createSourceFixture();

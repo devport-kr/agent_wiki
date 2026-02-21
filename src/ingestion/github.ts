@@ -8,6 +8,7 @@ export interface GitHubRepositoryMeta {
   repo: string;
   full_name: string;
   default_branch: string;
+  homepage_url?: string | null;
 }
 
 export interface RefResolutionResult {
@@ -111,6 +112,7 @@ export class OctokitGitHubResolver implements GitHubResolver {
         repo: response.data.name.toLowerCase(),
         full_name: response.data.full_name.toLowerCase(),
         default_branch: response.data.default_branch,
+        homepage_url: response.data.homepage ?? null,
       };
     } catch (error) {
       if (isHttpError(error, 404)) {

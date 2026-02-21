@@ -214,7 +214,7 @@ function buildManifestSignature(entries: ManifestFileEntry[]): string {
   return hash.digest("hex");
 }
 
-async function refreshSnapshotManifest(snapshotPath: string): Promise<string> {
+export async function refreshSnapshotManifest(snapshotPath: string): Promise<string> {
   const manifestPath = path.join(snapshotPath, MANIFEST_FILE_NAME);
   const manifest = await readSnapshotManifest(snapshotPath);
   const entries: ManifestFileEntry[] = [];

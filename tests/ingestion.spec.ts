@@ -202,6 +202,45 @@ describe("INGT-02 deterministic snapshots", () => {
 });
 
 describe("INGT-03 ingest run orchestration", () => {
+  it("discovers official docs from README/homepage and mirrors to __devport__/official-docs", async () => {
+    const sourceRoot = createSourceFixture();
+    const snapshotRoot = mkdtempSync(join(tmpdir(), "devport-ingest-official-docs-"));
+    const now = () => "2026-01-01T00:00:00.000Z";
+
+    const resolver = new StubResolver("main", {
+      main: LONG_SHA_A,
+    });
+
+    const manager = new RepoSnapshotManager({
+      snapshotRoot,
+      now,
+      sourcePath: sourceRoot,
+    });
+
+    const artifact = await runIngest(
+      {
+        repo_ref: {
+          repo: "acme/widget",
+          ref: "main",
+        },
+        force_rebuild: false,
+        snapshot_root: snapshotRoot,
+        fixture_commit: LONG_SHA_A,
+      },
+      {
+        now,
+        resolver,
+        snapshotManager: manager,
+        fixtureCommit: LONG_SHA_A,
+      },
+    );
+
+    expect(existsSync(join(artifact.snapshot_path, "__devport__/official-docs/index.json"))).toBe(true);
+
+    rmSync(snapshotRoot, { recursive: true, force: true });
+    rmSync(sourceRoot, { recursive: true, force: true });
+  });
+
   it("writes synthetic trend files under __devport__/trends", async () => {
     const sourceRoot = createSourceFixture();
     const snapshotRoot = mkdtempSync(join(tmpdir(), "devport-ingest-trends-"));

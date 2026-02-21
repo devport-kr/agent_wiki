@@ -19,6 +19,7 @@ import {
   type GitHubResolver,
   OctokitGitHubResolver,
 } from "./github";
+import { persistOfficialDocsArtifacts } from "./official-docs";
 import { persistTrendArtifacts } from "./trends";
 
 interface RunIngestDependencyConfig {
@@ -257,6 +258,13 @@ export async function runIngest(
         tag_count: number;
       }
     | undefined;
+  let officialDocsArtifacts:
+    | {
+        index_path: string;
+        discovered_count: number;
+        mirrored_count: number;
+      }
+    | undefined;
   try {
     const persistedTrendArtifacts = await persistTrendArtifacts({
       snapshotPath: snapshot.snapshotPath,
@@ -277,6 +285,23 @@ export async function runIngest(
 
     if (persistedTrendArtifacts.manifest_signature !== snapshot.manifest.manifest_signature) {
       snapshot.manifest.manifest_signature = persistedTrendArtifacts.manifest_signature;
+    }
+
+    const persistedOfficialDocsArtifacts = await persistOfficialDocsArtifacts({
+      snapshotPath: snapshot.snapshotPath,
+      repo,
+      resolver,
+      commitSha: resolved.commit_sha,
+    });
+
+    officialDocsArtifacts = {
+      index_path: persistedOfficialDocsArtifacts.index_path,
+      discovered_count: persistedOfficialDocsArtifacts.discovered_count,
+      mirrored_count: persistedOfficialDocsArtifacts.mirrored_count,
+    };
+
+    if (persistedOfficialDocsArtifacts.manifest_signature !== snapshot.manifest.manifest_signature) {
+      snapshot.manifest.manifest_signature = persistedOfficialDocsArtifacts.manifest_signature;
     }
 
     const fixtureCommit = config.fixtureCommit || parsedInput.fixture_commit;
@@ -322,6 +347,7 @@ export async function runIngest(
     idempotent_hit: snapshot.idempotentHit,
     metadata,
     trend_artifacts: trendArtifacts,
+    official_docs: officialDocsArtifacts,
     created_at: startedAt,
     completed_at: completedAt,
     ingest_ms: ingestMs,

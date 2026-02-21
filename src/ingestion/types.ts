@@ -92,6 +92,14 @@ export const ingestRunArtifactSchema = z
       })
       .strict()
       .optional(),
+    official_docs: z
+      .object({
+        index_path: z.string().trim().min(1),
+        discovered_count: z.number().int().nonnegative(),
+        mirrored_count: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
     created_at: z.string().datetime(),
     completed_at: z.string().datetime(),
     ingest_ms: z.number().int().nonnegative(),

@@ -1,5 +1,10 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
+import { validateSection } from "../src/chunked/validate-section";
 import { SectionOutputSchema } from "../src/contracts/chunked-generation";
 import { packageAcceptedOutputsForDelivery } from "../src/orchestration/package-delivery";
 import { validateDeliveryEnvelope } from "../src/packaging/validate";
@@ -133,6 +138,66 @@ describe("delivery packaging validation", () => {
 });
 
 describe("delivery packaging compatibility", () => {
+  it("rejects section missing architecture mermaid block", () => {
+    const snapshotPath = mkdtempSync(join(tmpdir(), "devport-snapshot-"));
+    mkdirSync(join(snapshotPath, "__devport__/trends"), { recursive: true });
+    writeFileSync(join(snapshotPath, "README.md"), "# readme");
+    writeFileSync(join(snapshotPath, "__devport__/trends/releases.json"), "{}");
+
+    const makeBody = (prefix: string) =>
+      `${Array.from({ length: 450 }, (_, index) => `${prefix}토큰${index}경로설명`).join(" ")} (근거: README.md)`;
+
+    const sectionWithoutMermaid = {
+      sectionId: "sec-1",
+      titleKo: "프로젝트 한눈에 보기",
+      summaryKo: "핵심 구조를 입문자 관점에서 설명하고 주요 파일 경로를 안내합니다.",
+      sourcePaths: ["README.md", "__devport__/trends/releases.json"],
+      subsections: [
+        {
+          sectionId: "sec-1",
+          subsectionId: "sub-1-1",
+          titleKo: "진입 흐름",
+          bodyKo: makeBody("a"),
+        },
+        {
+          sectionId: "sec-1",
+          subsectionId: "sub-1-2",
+          titleKo: "핵심 모듈",
+          bodyKo: makeBody("b"),
+        },
+        {
+          sectionId: "sec-1",
+          subsectionId: "sub-1-3",
+          titleKo: "데이터 경로",
+          bodyKo: makeBody("c"),
+        },
+      ],
+      claims: [
+        {
+          claimId: "claim-1",
+          sectionId: "sec-1",
+          subsectionId: "sub-1-1",
+          statementKo: "진입 흐름은 README 경로를 따라 초기화 순서를 설명합니다.",
+          citationIds: ["cit-1"],
+        },
+      ],
+      citations: [
+        {
+          citationId: "cit-1",
+          evidenceId: "ev-1",
+          repoPath: "README.md",
+          lineRange: { start: 1, end: 1 },
+          commitSha: COMMIT_SHA,
+          permalink: `https://github.com/acme/widget/blob/${COMMIT_SHA}/README.md#L1-L1`,
+          rationale: "README 경로 존재를 확인합니다.",
+        },
+      ],
+    };
+
+    const errors = validateSection(sectionWithoutMermaid as never, { snapshotPath });
+    expect(errors.some((error) => /mermaid/i.test(error))).toBe(true);
+  });
+
   it("accepts section output without claims/citations and with sourcePaths", () => {
     const parsed = SectionOutputSchema.safeParse({
       sectionId: "sec-1",

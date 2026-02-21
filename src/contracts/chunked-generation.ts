@@ -44,8 +44,8 @@ export const SectionPlanOutputSchema = z
     snapshotPath: z.string().min(1),
     generatedAt: z.string().datetime(),
     overviewKo: z.string().min(30),
-    totalSections: z.number().int().min(6),
-    sections: z.array(ChunkedSectionPlanEntrySchema).min(6),
+    totalSections: z.number().int().min(4).max(6),
+    sections: z.array(ChunkedSectionPlanEntrySchema).min(4).max(6),
     crossReferences: z.array(SectionPlanCrossReferenceSchema),
   })
   .strict()

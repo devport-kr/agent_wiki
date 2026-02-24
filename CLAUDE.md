@@ -35,22 +35,6 @@ No GitHub token needed for public repos. `npm install` is the only prerequisite.
 
 For private repos only, set `GITHUB_TOKEN` in `.env`.
 
-Quality-first runtime defaults:
-
-```bash
-DEVPORT_SNAPSHOT_BACKEND=hybrid
-DEVPORT_PLANNER_VERSION=v2
-DEVPORT_QUALITY_GATE_LEVEL=strict
-```
-
-When S3 snapshot storage is enabled, also set:
-
-```bash
-DEVPORT_S3_BUCKET=...
-DEVPORT_S3_REGION=...
-DEVPORT_S3_PREFIX=snapshots
-```
-
 ---
 
 ## Running in Parallel (Multiple Terminals)
@@ -111,8 +95,6 @@ Flags:
 - `--ref` (optional) — branch, tag, or full commit SHA. Defaults to the repo's default branch.
 - `--out` (optional) — path to write artifact JSON. Prints to stdout if omitted.
 - `--snapshot_root` (optional) — where to cache snapshots. Default: `devport-output/snapshots`
-- `--snapshot_backend` (optional) — `local|s3|hybrid`. Defaults from env (`DEVPORT_SNAPSHOT_BACKEND`) or `hybrid`.
-- `--lease_cache_max_bytes` (optional) — local lease-cache cap in bytes.
 - `--force_rebuild` (optional) — re-download even if a cached snapshot already exists.
 
 What `artifact.json` contains — read all of these:
@@ -176,7 +158,6 @@ Takes the `GroundedAcceptedOutput` JSON you produced, validates it against the O
 Flags:
 - `--input` (optional) — path to your generated JSON file. Reads from stdin if omitted.
 - `--out_dir` (optional) — root directory for delivery output. Default: `devport-output/delivery`
-- `--quality_gate_level` (optional) — `standard|strict`. Defaults from env (`DEVPORT_QUALITY_GATE_LEVEL`).
 - `--advance_baseline` (optional but almost always required) — saves the freshness state so `detect` can run incremental updates next time. If you skip this, `detect` will always say `BASELINE_MISSING` and force a full rebuild every time.
 - `--state_path` (optional) — where to write the freshness baseline. Default: `devport-output/freshness/state.json`
 
@@ -196,7 +177,6 @@ Analyzes the repo snapshot structure and produces a section plan with per-sectio
 
 Flags:
 - `--artifact` (required) — path to the artifact JSON from `ingest`
-- `--planner_version` (optional) — `v1|v2`. Defaults from env (`DEVPORT_PLANNER_VERSION`).
 - `--out` (optional) — path to write the section plan. Prints to stdout if omitted.
 
 The output `section-plan.json` contains:
@@ -219,7 +199,6 @@ Flags:
 - `--plan` (required) — path to the section plan from `plan-sections`
 - `--section` (required) — which section ID to persist (e.g. `sec-1`)
 - `--input` (required) — path to your section output JSON
-- `--quality_gate_level` (optional) — `standard|strict`. Defaults from env (`DEVPORT_QUALITY_GATE_LEVEL`).
 - `--session` (optional) — path to session state file. Auto-derived from repo name if omitted.
 
 Requires: `OPENAI_API_KEY`, `DEVPORT_DB_*` env vars.
@@ -239,7 +218,6 @@ Runs after all sections are persisted. Validates the complete wiki across all se
 Flags:
 - `--plan` (required) — path to the section plan
 - `--session` (optional) — path to session state file. Auto-derived if omitted.
-- `--quality_gate_level` (optional) — `standard|strict`. Defaults from env (`DEVPORT_QUALITY_GATE_LEVEL`).
 - `--advance_baseline` (optional but recommended) — saves freshness state for future `detect` runs
 - `--state_path` (optional) — where to write freshness baseline. Default: `devport-output/freshness/state.json`
 

@@ -48,6 +48,50 @@ For private repos only, set `GITHUB_TOKEN` in `.env`.
 
 ---
 
+## S3 Storage Backend
+
+The pipeline supports three storage modes via `DEVPORT_SNAPSHOT_BACKEND` in `.env`:
+
+| Mode | Snapshots | delivery.json | state.json | session.json |
+|------|-----------|---------------|------------|--------------|
+| `local` (default) | Local disk only | Local disk | Local disk | Local disk |
+| `hybrid` | S3 tarball + local extract | Local + S3 mirror | S3-first, local fallback | S3-first, local fallback |
+| `s3` | S3 tarball + local extract* | S3 only | S3 only | S3 only |
+
+\* Snapshot files are always extracted to local disk during a run — the agent reads source files from the filesystem. S3 holds the tarball as the source of truth; if the local snapshot directory is deleted, the next `ingest` restores it from S3 instead of re-cloning.
+
+### S3 key structure (no prefix by default)
+
+```
+snapshots/{snapshotId}.tar.gz
+delivery/{owner}/{repo}/delivery.json
+freshness/state.json
+chunked/{owner}/{repo}/session.json
+```
+
+### Required env vars for s3/hybrid mode
+
+```bash
+DEVPORT_SNAPSHOT_BACKEND=s3        # or hybrid
+DEVPORT_S3_BUCKET=your-bucket-name
+DEVPORT_S3_REGION=ap-northeast-2
+DEVPORT_S3_PREFIX=                 # leave empty unless you need a key prefix
+# AWS credentials — use one of:
+AWS_PROFILE=your-profile
+# or:
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+### Behavior notes
+
+- S3 failures in `hybrid` mode are **non-fatal** — the pipeline warns on stderr and continues using local files.
+- S3 failures in `s3` mode for `state.json` and `session.json` are **fatal** — nothing was written locally either.
+- `detect` reads `state.json` from S3 in `s3`/`hybrid` mode. Without a valid baseline in S3, it always returns `full-rebuild`. Run the full pipeline with `finalize --advance_baseline` first to populate S3.
+- Concurrent runs against different repos are safe. Concurrent runs against the **same** repo can cause a race on `state.json` writes — re-run `finalize --advance_baseline` for the affected repo if this happens.
+
+---
+
 ## Running in Parallel (Multiple Terminals)
 
 You can run multiple terminals simultaneously, each processing a different repo. It is safe as long as each terminal is working on a unique `owner/repo`.
@@ -529,7 +573,10 @@ devport-output/               ← gitignored, never commit this directory
 
   freshness/
     state.json                ← written by `package --advance_baseline`, read by `detect`
+                                 (skipped in s3 mode — stored in S3 only)
 ```
+
+In `s3` mode, `delivery.json`, `state.json`, and `session.json` are not written to the local `devport-output/` tree — they exist only in the S3 bucket.
 
 ---
 

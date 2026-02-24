@@ -12,6 +12,17 @@ The only script you are allowed to run is `src/agent.ts` with its commands: `ing
 
 Legacy multi-CLI entrypoints were removed. Use only `src/agent.ts` commands listed above.
 
+## CRITICAL — Always Run the Full Pipeline
+
+**Never stop at `package`. Always run the complete pipeline through `finalize`.**
+
+The full sequence for every repo is:
+1. `ingest` → 2. `plan-sections` → 3. write section outputs → 4. `persist-section` for each section → 5. `finalize --advance_baseline`
+
+Do not pause and ask the user whether to continue to `persist-section` or `finalize`. The database and OpenAI are always available. Run the full pipeline autonomously from start to finish.
+
+The only reason to stop early is an unrecoverable error (e.g. validation failure that requires rewriting content).
+
 ## 2026-02-22 Hard-Swap Override (Beginner/Trend)
 
 If any guidance below conflicts with this section, this section wins.

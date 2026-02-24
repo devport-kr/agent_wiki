@@ -30,6 +30,9 @@ import path from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 
 import { loadEnvFiles } from "./shared/load-env";
+import { loadStorageConfig, type StorageConfig } from "./shared/storage-config";
+import { getS3Client, buildS3Key } from "./shared/s3-client";
+import { createS3JsonAdapter } from "./shared/s3-storage";
 import { runIngest } from "./ingestion/run";
 import { packageAcceptedOutputsForDelivery } from "./orchestration/package-delivery";
 import type { GroundedAcceptedOutput } from "./contracts/grounded-output";
@@ -55,10 +58,51 @@ function loadRuntimeConfig(
   env: NodeJS.ProcessEnv,
 ): {
   qualityGateLevel: QualityGateLevel;
+  storageConfig: StorageConfig | null;
 } {
   const qualityGateLevelEnv = env.DEVPORT_QUALITY_GATE_LEVEL;
   const qualityGateLevel = qualityGateLevelEnv === "standard" || qualityGateLevelEnv === "strict" ? qualityGateLevelEnv : "strict";
-  return { qualityGateLevel };
+
+  let storageConfig: StorageConfig | null = null;
+  try {
+    storageConfig = loadStorageConfig(env);
+  } catch (err) {
+    process.stderr.write(`[devport-agent] warning: storage config invalid: ${String(err)}\n`);
+  }
+
+  return { qualityGateLevel, storageConfig };
+}
+
+function makeS3JsonAdapter(storageConfig: StorageConfig | null) {
+  if (!storageConfig || storageConfig.backend === "local" || !storageConfig.bucket || !storageConfig.region) {
+    return null;
+  }
+  const client = getS3Client(storageConfig.region);
+  return createS3JsonAdapter(client, storageConfig.bucket);
+}
+
+function s3FreshnessOptions(storageConfig: StorageConfig | null, statePath: string) {
+  const adapter = makeS3JsonAdapter(storageConfig);
+  if (!adapter) return undefined;
+  const key = buildS3Key(storageConfig!.prefix, statePath.replace(/^devport-output\//, ""));
+  return { adapter, key, exclusive: storageConfig!.backend === "s3" };
+}
+
+function s3SessionOptions(storageConfig: StorageConfig | null, sessionPath: string) {
+  const adapter = makeS3JsonAdapter(storageConfig);
+  if (!adapter) return undefined;
+  // sessionPath is absolute; normalize to relative under devport-output/chunked/
+  const match = sessionPath.match(/devport-output\/chunked\/.+/);
+  const relPath = match ? match[0] : `chunked/${path.basename(path.dirname(sessionPath))}/${path.basename(sessionPath)}`;
+  const key = buildS3Key(storageConfig!.prefix, relPath);
+  return { adapter, key, exclusive: storageConfig!.backend === "s3" };
+}
+
+function s3DeliveryOptions(storageConfig: StorageConfig | null, owner: string, repo: string) {
+  const adapter = makeS3JsonAdapter(storageConfig);
+  if (!adapter) return null;
+  const key = buildS3Key(storageConfig!.prefix, `delivery/${owner}/${repo}/delivery.json`);
+  return { adapter, key };
 }
 
 function parseFlags(argv: string[]): Record<string, string> {
@@ -111,14 +155,18 @@ async function ingestCommand(flags: Record<string, string>): Promise<void> {
   const { repo, ref } = parseRepo(requireFlag(flags, "repo"), flags["ref"]);
   const snapshotRoot = flags["snapshot_root"] ?? "devport-output/snapshots";
   const outFile = flags["out"];
+  const { storageConfig } = loadRuntimeConfig(process.env);
 
   process.stderr.write(`[devport-agent] ingest: ${repo}${ref ? `@${ref}` : ""}\n`);
 
-  const artifact = await runIngest({
-    repo_ref: { repo, ...(ref ? { ref } : {}) },
-    snapshot_root: path.resolve(snapshotRoot),
-    force_rebuild: flags["force_rebuild"] === "true",
-  });
+  const artifact = await runIngest(
+    {
+      repo_ref: { repo, ...(ref ? { ref } : {}) },
+      snapshot_root: path.resolve(snapshotRoot),
+      force_rebuild: flags["force_rebuild"] === "true",
+    },
+    { storageConfig: storageConfig ?? undefined },
+  );
 
   const cacheLabel = artifact.idempotent_hit ? "cache hit" : "downloaded";
   process.stderr.write(
@@ -162,11 +210,12 @@ async function detectCommand(flags: Record<string, string>): Promise<void> {
   }
   const repoRef = `${parts[0]}/${parts[1]}`;
   const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
+  const { storageConfig: detectStorageConfig } = loadRuntimeConfig(process.env);
 
   process.stderr.write(`[devport-agent] detect: ${repoRef}\n`);
 
   // Load freshness baseline
-  const state = await loadFreshnessState(statePath);
+  const state = await loadFreshnessState(statePath, s3FreshnessOptions(detectStorageConfig, statePath));
   const baseline = state.repos[repoRef];
 
   if (!baseline) {
@@ -252,6 +301,7 @@ async function packageCommand(flags: Record<string, string>): Promise<void> {
   const advanceBaseline = flags["advance_baseline"] === "true";
   const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
   const runtimeConfig = loadRuntimeConfig(process.env);
+  const { storageConfig } = runtimeConfig;
 
   const qualityGateLevelFlag = flags["quality_gate_level"];
   let qualityGateLevel = runtimeConfig.qualityGateLevel;
@@ -289,21 +339,40 @@ async function packageCommand(flags: Record<string, string>): Promise<void> {
     throw new Error(`repo_ref must be owner/repo, got: ${acceptedOutput.repo_ref}`);
   }
 
-  const deliveryDir = path.resolve(outDir, owner, repoName);
-  const deliveryPath = path.join(deliveryDir, "delivery.json");
-  await mkdir(deliveryDir, { recursive: true });
-  await writeFile(deliveryPath, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
+  const deliveryJson = `${JSON.stringify(envelope, null, 2)}\n`;
 
-  process.stderr.write(
-    `  ✓ ${sectionCount} sections, glossary: ${glossaryCount} terms, provenance attached\n`,
-  );
-  process.stderr.write(`  saved → ${deliveryPath}\n`);
+  if (storageConfig?.backend !== "s3") {
+    const deliveryDir = path.resolve(outDir, owner, repoName);
+    const deliveryPath = path.join(deliveryDir, "delivery.json");
+    await mkdir(deliveryDir, { recursive: true });
+    await writeFile(deliveryPath, deliveryJson, "utf8");
+    process.stderr.write(
+      `  ✓ ${sectionCount} sections, glossary: ${glossaryCount} terms, provenance attached\n`,
+    );
+    process.stderr.write(`  saved → ${deliveryPath}\n`);
+  } else {
+    process.stderr.write(
+      `  ✓ ${sectionCount} sections, glossary: ${glossaryCount} terms, provenance attached\n`,
+    );
+  }
+
+  // Upload delivery.json to S3
+  const s3Delivery = s3DeliveryOptions(storageConfig, owner, repoName);
+  if (s3Delivery) {
+    try {
+      await s3Delivery.adapter.writeJson(s3Delivery.key, envelope);
+      process.stderr.write(`  [s3] delivery → s3://${storageConfig!.bucket}/${s3Delivery.key}\n`);
+    } catch (err) {
+      process.stderr.write(`  [s3] warning: delivery upload failed: ${String(err)}\n`);
+    }
+  }
 
   // Optionally advance the freshness baseline
   if (advanceBaseline) {
     try {
       const evidence = extractSectionEvidenceFromAcceptedOutput(acceptedOutput);
-      const state = await loadFreshnessState(statePath);
+      const s3Fresh = s3FreshnessOptions(storageConfig, statePath);
+      const state = await loadFreshnessState(statePath, s3Fresh);
       const repoRef = envelope.project.repoRef.toLowerCase();
 
       const nextState = {
@@ -318,7 +387,7 @@ async function packageCommand(flags: Record<string, string>): Promise<void> {
         },
       };
 
-      await saveFreshnessState(statePath, nextState);
+      await saveFreshnessState(statePath, nextState, s3Fresh);
       process.stderr.write(`  ✓ freshness baseline → ${envelope.project.commitSha.slice(0, 7)}\n`);
     } catch (err) {
       // Delivery is already written — warn but don't fail
@@ -405,7 +474,8 @@ async function persistCommand(flags: Record<string, string>): Promise<void> {
     if (advanceBaseline) {
       try {
         const evidence = extractSectionEvidenceFromAcceptedOutput(acceptedOutput);
-        const state = await loadFreshnessState(statePath);
+        const s3Fresh = s3FreshnessOptions(runtimeConfig.storageConfig, statePath);
+        const state = await loadFreshnessState(statePath, s3Fresh);
         const repoRef = envelope.project.repoRef.toLowerCase();
 
         const nextState = {
@@ -420,7 +490,7 @@ async function persistCommand(flags: Record<string, string>): Promise<void> {
           },
         };
 
-        await saveFreshnessState(statePath, nextState);
+        await saveFreshnessState(statePath, nextState, s3Fresh);
         process.stderr.write(`  ✓ freshness baseline → ${envelope.project.commitSha.slice(0, 7)}\n`);
       } catch (err) {
         process.stderr.write(
@@ -528,11 +598,13 @@ async function persistSectionCommand(flags: Record<string, string>): Promise<voi
   process.stderr.write(`  ✓ section validation passed\n`);
 
   // Load/init session
+  const { storageConfig: persistSectionStorageConfig } = loadRuntimeConfig(process.env);
   const sessionPath = sessionFile
     ? path.resolve(sessionFile)
     : sessionPathForRepo(plan.repoFullName);
+  const s3Session = s3SessionOptions(persistSectionStorageConfig, sessionPath);
 
-  let session = await loadSession(sessionPath);
+  let session = await loadSession(sessionPath, s3Session);
   if (!session) {
     session = initSession(plan, planFile);
     process.stderr.write(`  created new session: ${session.sessionId}\n`);
@@ -593,7 +665,7 @@ async function persistSectionCommand(flags: Record<string, string>): Promise<voi
       koreanChars,
     });
 
-    await saveSession(sessionPath, session);
+    await saveSession(sessionPath, session, s3Session);
 
     process.stderr.write(
       `  ✓ ${sectionId}: ${result.chunksInserted} chunks embedded, ` +
@@ -620,6 +692,7 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
   const sessionFile = flags["session"];
   const advanceBaseline = flags["advance_baseline"] === "true";
   const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
+  const { storageConfig: finalizeStorageConfig } = loadRuntimeConfig(process.env);
 
   // Load plan
   const planRaw = await readFile(path.resolve(planFile), "utf8");
@@ -629,8 +702,9 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
   const sessionPath = sessionFile
     ? path.resolve(sessionFile)
     : sessionPathForRepo(plan.repoFullName);
+  const s3Session = s3SessionOptions(finalizeStorageConfig, sessionPath);
 
-  const session = await loadSession(sessionPath);
+  const session = await loadSession(sessionPath, s3Session);
   if (!session) {
     throw new Error(
       `No session found at ${sessionPath}. Run persist-section for at least one section first.`,
@@ -661,6 +735,7 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
       openai,
       advanceBaseline,
       statePath,
+      s3FreshnessOptions: s3FreshnessOptions(finalizeStorageConfig, statePath),
     });
 
     process.stderr.write(

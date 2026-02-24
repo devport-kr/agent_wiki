@@ -7,6 +7,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.996.0",
     "@dqbd/tiktoken": "^1.0.22",
     "@octokit/rest": "^22.0.1",
     "ajv": "^8.18.0",
@@ -14,11 +15,13 @@
     "openai": "^6.22.0",
     "p-queue": "^9.1.0",
     "pg": "^8.18.0",
+    "tar": "^7.5.9",
     "tree-sitter": "^0.25.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/pg": "^8.16.0",
+    "@types/tar": "^6.1.13",
     "tsx": "^4.20.4",
     "vitest": "^2.1.1"
   }

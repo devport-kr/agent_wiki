@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { parseRepoRef } from "../ingestion/ref";
+import type { S3JsonAdapter } from "../shared/s3-storage";
 import {
   FreshnessBaselineSchema,
   FreshnessStateFileSchema,
@@ -85,7 +86,29 @@ export function parseFreshnessState(raw: string): FreshnessStateFile {
   }
 }
 
-export async function loadFreshnessState(statePath: string): Promise<FreshnessStateFile> {
+export async function loadFreshnessState(
+  statePath: string,
+  s3?: { adapter: S3JsonAdapter; key: string; exclusive?: boolean },
+): Promise<FreshnessStateFile> {
+  if (s3) {
+    try {
+      const remote = await s3.adapter.readJson(s3.key);
+      if (remote !== null) {
+        try {
+          return canonicalizeState(remote as FreshnessStateFile);
+        } catch {
+          if (s3.exclusive) return EMPTY_STATE;
+          // fall through to local
+        }
+      } else if (s3.exclusive) {
+        return EMPTY_STATE;
+      }
+    } catch (err) {
+      process.stderr.write(`[s3] warning: loadFreshnessState from S3 failed: ${String(err)}\n`);
+      if (s3.exclusive) return EMPTY_STATE;
+    }
+  }
+
   const absolute = path.resolve(statePath);
   let raw: string;
 
@@ -106,8 +129,23 @@ export function serializeFreshnessState(state: FreshnessStateFile): string {
   return `${JSON.stringify(canonical, null, 2)}\n`;
 }
 
-export async function saveFreshnessState(statePath: string, state: FreshnessStateFile): Promise<void> {
-  const absolute = path.resolve(statePath);
-  await fs.mkdir(path.dirname(absolute), { recursive: true });
-  await fs.writeFile(absolute, serializeFreshnessState(state), "utf8");
+export async function saveFreshnessState(
+  statePath: string,
+  state: FreshnessStateFile,
+  s3?: { adapter: S3JsonAdapter; key: string; exclusive?: boolean },
+): Promise<void> {
+  if (!s3?.exclusive) {
+    const absolute = path.resolve(statePath);
+    await fs.mkdir(path.dirname(absolute), { recursive: true });
+    await fs.writeFile(absolute, serializeFreshnessState(state), "utf8");
+  }
+
+  if (s3) {
+    try {
+      await s3.adapter.writeJson(s3.key, canonicalizeState(state));
+    } catch (err) {
+      process.stderr.write(`[s3] warning: saveFreshnessState to S3 failed: ${String(err)}\n`);
+      if (s3.exclusive) throw err; // re-throw in pure S3 mode — local wasn't written either
+    }
+  }
 }

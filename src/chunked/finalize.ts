@@ -15,12 +15,14 @@ import {
 } from "../orchestration/package-delivery";
 import { extractSectionEvidenceFromAcceptedOutput } from "../freshness/section-evidence";
 import { loadFreshnessState, saveFreshnessState } from "../freshness/state";
+import type { S3JsonAdapter } from "../shared/s3-storage";
 
 export interface FinalizeOptions {
   pool: pg.Pool;
   openai: OpenAI;
   advanceBaseline: boolean;
   statePath: string;
+  s3FreshnessOptions?: { adapter: S3JsonAdapter; key: string };
 }
 
 export interface FinalizeResult {
@@ -30,6 +32,15 @@ export interface FinalizeResult {
   totalTrendFacts: number;
   totalKoreanChars: number;
 }
+
+const LEGACY_SECTION_COLUMNS = [
+  "what_section",
+  "how_section",
+  "architecture_section",
+  "releases_section",
+  "activity_section",
+  "chat_section",
+];
 
 /**
  * Loads all section output files from the session and validates their schema.
@@ -202,6 +213,20 @@ function buildCurrentCounters(
   };
 }
 
+async function hasLegacySnapshotColumns(pool: pg.Pool): Promise<boolean> {
+  const result = await pool.query<{ column_name: string }>(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'project_wiki_snapshots'
+        AND column_name = ANY($1::text[])
+    `,
+    [LEGACY_SECTION_COLUMNS],
+  );
+  return result.rows.length === LEGACY_SECTION_COLUMNS.length;
+}
+
 /**
  * Finalize: runs after all sections are persisted.
  * Validates the complete wiki and updates snapshot/draft tables.
@@ -211,7 +236,7 @@ export async function finalize(
   plan: SectionPlanOutput,
   options: FinalizeOptions,
 ): Promise<FinalizeResult> {
-  const { pool, advanceBaseline, statePath } = options;
+  const { pool, advanceBaseline, statePath, s3FreshnessOptions } = options;
 
   // 1. Verify all sections are persisted
   const pendingSections = Object.entries(session.sections)
@@ -266,22 +291,56 @@ export async function finalize(
     const generatedAt = new Date().toISOString();
     const sectionsJson = JSON.stringify(sectionsJsonb);
     const countersJson = JSON.stringify(currentCounters);
+    const useLegacyColumns = await hasLegacySnapshotColumns(client);
+    const legacySectionsJson = JSON.stringify({ sections: sectionsJsonb });
 
-    await client.query(
-      `INSERT INTO project_wiki_snapshots
-        (project_external_id, generated_at, sections, current_counters,
-         is_data_ready, hidden_sections, readiness_metadata, created_at, updated_at)
-      VALUES ($1, $2, $3::jsonb, $4::jsonb, true, '[]'::jsonb,
-              '{"passesTopStarGate": true}'::jsonb, NOW(), NOW())
-      ON CONFLICT (project_external_id) DO UPDATE SET
-        generated_at = EXCLUDED.generated_at,
-        sections = EXCLUDED.sections,
-        current_counters = EXCLUDED.current_counters,
-        is_data_ready = true,
-        readiness_metadata = '{"passesTopStarGate": true}'::jsonb,
-        updated_at = NOW()`,
-      [projectExternalId, generatedAt, sectionsJson, countersJson],
-    );
+    if (useLegacyColumns) {
+      await client.query(
+        `INSERT INTO project_wiki_snapshots
+          (project_external_id, generated_at, sections, current_counters,
+           is_data_ready, hidden_sections, readiness_metadata,
+           what_section, how_section, architecture_section, releases_section, activity_section, chat_section,
+           created_at, updated_at)
+        VALUES ($1, $2, $3::jsonb, $4::jsonb, true, '[]'::jsonb, '{"passesTopStarGate": true}'::jsonb,
+                $5::jsonb, $5::jsonb, $5::jsonb, $5::jsonb, $5::jsonb, $5::jsonb, NOW(), NOW())
+        ON CONFLICT (project_external_id) DO UPDATE SET
+          generated_at = EXCLUDED.generated_at,
+          sections = EXCLUDED.sections,
+          current_counters = EXCLUDED.current_counters,
+          is_data_ready = true,
+          readiness_metadata = '{"passesTopStarGate": true}'::jsonb,
+          what_section = EXCLUDED.what_section,
+          how_section = EXCLUDED.how_section,
+          architecture_section = EXCLUDED.architecture_section,
+          releases_section = EXCLUDED.releases_section,
+          activity_section = EXCLUDED.activity_section,
+          chat_section = EXCLUDED.chat_section,
+          updated_at = NOW()`,
+        [
+          projectExternalId,
+          generatedAt,
+          sectionsJson,
+          countersJson,
+          legacySectionsJson,
+        ],
+      );
+    } else {
+      await client.query(
+        `INSERT INTO project_wiki_snapshots
+          (project_external_id, generated_at, sections, current_counters,
+           is_data_ready, hidden_sections, readiness_metadata, created_at, updated_at)
+        VALUES ($1, $2, $3::jsonb, $4::jsonb, true, '[]'::jsonb,
+                '{"passesTopStarGate": true}'::jsonb, NOW(), NOW())
+        ON CONFLICT (project_external_id) DO UPDATE SET
+          generated_at = EXCLUDED.generated_at,
+          sections = EXCLUDED.sections,
+          current_counters = EXCLUDED.current_counters,
+          is_data_ready = true,
+          readiness_metadata = '{"passesTopStarGate": true}'::jsonb,
+          updated_at = NOW()`,
+        [projectExternalId, generatedAt, sectionsJson, countersJson],
+      );
+    }
 
     // Upsert wiki_drafts
     const existingDraft = await client.query<{ id: number }>(
@@ -321,7 +380,7 @@ export async function finalize(
   if (advanceBaseline) {
     try {
       const evidence = extractSectionEvidenceFromAcceptedOutput(acceptedOutput);
-      const state = await loadFreshnessState(statePath);
+      const state = await loadFreshnessState(statePath, s3FreshnessOptions);
       const repoRef = session.repoFullName.toLowerCase();
 
       const nextState = {
@@ -336,7 +395,7 @@ export async function finalize(
         },
       };
 
-      await saveFreshnessState(statePath, nextState);
+      await saveFreshnessState(statePath, nextState, s3FreshnessOptions);
       process.stderr.write(`  ✓ freshness baseline → ${session.commitSha.slice(0, 7)}\n`);
     } catch (err) {
       process.stderr.write(

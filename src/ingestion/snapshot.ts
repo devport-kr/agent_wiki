@@ -29,7 +29,7 @@ export interface SnapshotManifestSource {
   created_at: string;
 }
 
-interface GitShell {
+export interface GitShell {
   materialize({
     repoFullName,
     commitSha,
@@ -185,7 +185,7 @@ async function runGitCommand(args: string[], cwd: string): Promise<void> {
   });
 }
 
-const defaultGitShell: GitShell = {
+export const defaultGitShell: GitShell = {
   async materialize({ repoFullName, commitSha, snapshotPath }) {
     const repoUrl = `https://github.com/${repoFullName}.git`;
     await runGitCommand(["clone", "--quiet", repoUrl, snapshotPath], process.cwd());

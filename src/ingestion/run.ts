@@ -11,7 +11,9 @@ import {
   type RepoSnapshotRequest,
   type RepoSnapshotResult,
   RepoSnapshotManager,
+  defaultGitShell,
 } from "./snapshot";
+import { S3SnapshotShell } from "./snapshot-s3";
 import { extractMetadata } from "./metadata";
 import { inferRefType, normalizeRef, parseRepoRef } from "./ref";
 import {
@@ -21,6 +23,8 @@ import {
 } from "./github";
 import { persistOfficialDocsArtifacts } from "./official-docs";
 import { persistTrendArtifacts } from "./trends";
+import type { StorageConfig } from "../shared/storage-config";
+import { getS3Client } from "../shared/s3-client";
 
 interface RunIngestDependencyConfig {
   now?: () => string;
@@ -29,6 +33,7 @@ interface RunIngestDependencyConfig {
   snapshotRoot?: string;
   sourcePath?: string;
   fixtureCommit?: string;
+  storageConfig?: StorageConfig;
   languageResolver?: (params: {
     owner: string;
     repo: string;
@@ -212,6 +217,15 @@ export async function runIngest(
 
   const resolver = config.resolver || new OctokitGitHubResolver(process.env.GITHUB_TOKEN);
 
+  let gitShell = config.sourcePath ? undefined : defaultGitShell;
+  if (!config.sourcePath && config.storageConfig && config.storageConfig.backend !== "local") {
+    const sc = config.storageConfig;
+    if (sc.bucket && sc.region) {
+      const s3Client = getS3Client(sc.region);
+      gitShell = new S3SnapshotShell(s3Client, sc.bucket, sc.prefix, defaultGitShell);
+    }
+  }
+
   const snapshotManager =
     config.snapshotManager ||
     new RepoSnapshotManager({
@@ -219,6 +233,7 @@ export async function runIngest(
       now,
       forceRebuild: parsedInput.force_rebuild,
       sourcePath: config.sourcePath,
+      gitShell,
     });
 
   let resolved: ResolvedRef;

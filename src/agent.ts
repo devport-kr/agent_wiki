@@ -49,6 +49,18 @@ import { ingestRunArtifactSchema } from "./ingestion/types";
 
 // ── CLI arg parsing ─────────────────────────────────────────────────────────
 
+type QualityGateLevel = "standard" | "strict";
+
+function loadRuntimeConfig(
+  env: NodeJS.ProcessEnv,
+): {
+  qualityGateLevel: QualityGateLevel;
+} {
+  const qualityGateLevelEnv = env.DEVPORT_QUALITY_GATE_LEVEL;
+  const qualityGateLevel = qualityGateLevelEnv === "standard" || qualityGateLevelEnv === "strict" ? qualityGateLevelEnv : "strict";
+  return { qualityGateLevel };
+}
+
 function parseFlags(argv: string[]): Record<string, string> {
   const flags: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {

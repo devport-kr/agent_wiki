@@ -43,22 +43,23 @@ You can run multiple terminals simultaneously, each processing a different repo.
 
 ### Parallel file naming — MANDATORY RULE
 
-**Every intermediate file you write must be prefixed with the repo slug.** The slug is the repo name portion of `owner/repo`, lowercased with slashes replaced by hyphens.
+**All intermediate files must be written to `devport-output/workspace/` and prefixed with the repo slug.** Never write them to the project root.
 
-| Generic (WRONG — causes collision) | Repo-scoped (CORRECT) |
-|-------------------------------------|-----------------------|
-| `artifact.json` | `ollama-artifact.json` |
-| `section-plan.json` | `ollama-section-plan.json` |
-| `section-1-output.json` | `ollama-section-1-output.json` |
-| `accepted-output.json` | `ollama-accepted-output.json` |
+The slug is the repo name portion of `owner/repo` (e.g. `ollama` for `ollama/ollama`).
+
+| Generic root-level (WRONG) | Correct path |
+|----------------------------|--------------|
+| `artifact.json` | `devport-output/workspace/ollama-artifact.json` |
+| `section-plan.json` | `devport-output/workspace/ollama-section-plan.json` |
+| `section-1-output.json` | `devport-output/workspace/ollama-section-1-output.json` |
+| `accepted-output.json` | `devport-output/workspace/ollama-accepted-output.json` |
 
 Example — two repos running at the same time:
 ```
-Terminal A (ollama/ollama):          Terminal B (redis/redis):
-ollama-artifact.json                 redis-artifact.json
-ollama-section-plan.json             redis-section-plan.json
-ollama-section-1-output.json         redis-section-1-output.json
-ollama-section-2-output.json         redis-section-2-output.json
+Terminal A (ollama/ollama):                           Terminal B (redis/redis):
+devport-output/workspace/ollama-artifact.json         devport-output/workspace/redis-artifact.json
+devport-output/workspace/ollama-section-plan.json     devport-output/workspace/redis-section-plan.json
+devport-output/workspace/ollama-section-1-output.json devport-output/workspace/redis-section-1-output.json
 ```
 
 Why system-managed files are already safe:
@@ -104,8 +105,8 @@ All commands are run from the project root with `npx tsx src/agent.ts`.
 ### 1. `ingest` — snapshot a repo
 
 ```bash
-npx tsx src/agent.ts ingest --repo owner/repo --out {repo-slug}-artifact.json
-# Example: npx tsx src/agent.ts ingest --repo ollama/ollama --out ollama-artifact.json
+npx tsx src/agent.ts ingest --repo owner/repo --out devport-output/workspace/{repo-slug}-artifact.json
+# Example: npx tsx src/agent.ts ingest --repo ollama/ollama --out devport-output/workspace/ollama-artifact.json
 ```
 
 Downloads (or uses cache) the full repo snapshot and writes metadata to `artifact.json`.
@@ -129,7 +130,7 @@ What `{repo-slug}-artifact.json` contains — read all of these:
 
 After running `ingest`, read the files under `snapshot_path`. Start with `metadata.key_paths` — these are the highest-signal files. Read as many as needed to fully understand the architecture, entry points, data flow, and key abstractions.
 
-**Reminder:** The output file you named `{repo-slug}-artifact.json` is only read by you (the AI) and passed via flags to subsequent commands. It never collides with other repos.
+**Reminder:** The output file at `devport-output/workspace/{repo-slug}-artifact.json` is only read by you (the AI) and passed via flags to subsequent commands. It never collides with other repos. The `devport-output/` directory is gitignored so these files stay local.
 
 ---
 
@@ -172,8 +173,8 @@ If `detect` returns `"reason": "BASELINE_MISSING"`, it means `package --advance_
 ### 3. `package` — validate your output and write delivery.json
 
 ```bash
-npx tsx src/agent.ts package --input {repo-slug}-accepted-output.json --advance_baseline
-# Example: npx tsx src/agent.ts package --input ollama-accepted-output.json --advance_baseline
+npx tsx src/agent.ts package --input devport-output/workspace/{repo-slug}-accepted-output.json --advance_baseline
+# Example: npx tsx src/agent.ts package --input devport-output/workspace/ollama-accepted-output.json --advance_baseline
 ```
 
 Takes the `GroundedAcceptedOutput` JSON you produced, validates it against the OUT-04 contract, auto-builds the glossary from your Korean text, attaches provenance metadata, and writes the final `delivery.json`.
@@ -193,8 +194,8 @@ Output written to: `devport-output/delivery/{owner}/{repo}/delivery.json`
 ### 4. `plan-sections` — analyze repo and produce a section plan
 
 ```bash
-npx tsx src/agent.ts plan-sections --artifact {repo-slug}-artifact.json --out {repo-slug}-section-plan.json
-# Example: npx tsx src/agent.ts plan-sections --artifact ollama-artifact.json --out ollama-section-plan.json
+npx tsx src/agent.ts plan-sections --artifact devport-output/workspace/{repo-slug}-artifact.json --out devport-output/workspace/{repo-slug}-section-plan.json
+# Example: npx tsx src/agent.ts plan-sections --artifact devport-output/workspace/ollama-artifact.json --out devport-output/workspace/ollama-section-plan.json
 ```
 
 Analyzes the repo snapshot structure and produces a section plan with per-section focus file lists. This is deterministic — no LLM calls. It tells you what sections to write and which files to read for each one.
@@ -214,8 +215,8 @@ The output `{repo-slug}-section-plan.json` contains:
 ### 5. `persist-section` — validate and persist a single section
 
 ```bash
-npx tsx src/agent.ts persist-section --plan {repo-slug}-section-plan.json --section sec-1 --input {repo-slug}-section-1-output.json
-# Example: npx tsx src/agent.ts persist-section --plan ollama-section-plan.json --section sec-1 --input ollama-section-1-output.json
+npx tsx src/agent.ts persist-section --plan devport-output/workspace/{repo-slug}-section-plan.json --section sec-1 --input devport-output/workspace/{repo-slug}-section-1-output.json
+# Example: npx tsx src/agent.ts persist-section --plan devport-output/workspace/ollama-section-plan.json --section sec-1 --input devport-output/workspace/ollama-section-1-output.json
 ```
 
 Validates a single section output, embeds its chunks via OpenAI, and writes them to PostgreSQL. Runs per-section validation to catch errors early.
@@ -235,8 +236,8 @@ The command is idempotent — re-running for the same section replaces its chunk
 ### 6. `finalize` — cross-validate all sections and update snapshot
 
 ```bash
-npx tsx src/agent.ts finalize --plan {repo-slug}-section-plan.json --advance_baseline
-# Example: npx tsx src/agent.ts finalize --plan ollama-section-plan.json --advance_baseline
+npx tsx src/agent.ts finalize --plan devport-output/workspace/{repo-slug}-section-plan.json --advance_baseline
+# Example: npx tsx src/agent.ts finalize --plan devport-output/workspace/ollama-section-plan.json --advance_baseline
 ```
 
 Runs after all sections are persisted. Validates the complete wiki across all sections (cross-section repetition, global ID uniqueness) and updates `project_wiki_snapshots` and `wiki_drafts` tables.
@@ -260,26 +261,26 @@ This is the preferred workflow. It produces higher quality output because you fo
 ```bash
 # Step 1: snapshot the repo
 # Replace {repo-slug} with the repo name, e.g. "ollama" for ollama/ollama
-npx tsx src/agent.ts ingest --repo owner/repo --out {repo-slug}-artifact.json
+npx tsx src/agent.ts ingest --repo owner/repo --out devport-output/workspace/{repo-slug}-artifact.json
 
 # Step 2: plan sections — this analyzes the repo and tells you what to write
-npx tsx src/agent.ts plan-sections --artifact {repo-slug}-artifact.json --out {repo-slug}-section-plan.json
+npx tsx src/agent.ts plan-sections --artifact devport-output/workspace/{repo-slug}-artifact.json --out devport-output/workspace/{repo-slug}-section-plan.json
 ```
 
-After step 2, read `{repo-slug}-section-plan.json`. It contains:
+After step 2, read `devport-output/workspace/{repo-slug}-section-plan.json`. It contains:
 - A list of sections with `sectionId`, `titleKo`, `summaryKo`
 - `focusPaths` for each section — the specific files you should read for that section
 - `subsections` for each section — pre-planned subsection structure with titles and objectives
 
 **Step 3: For EACH section in the plan, one at a time:**
 
-1. Read the `focusPaths` listed for that section in `{repo-slug}-section-plan.json`
+1. Read the `focusPaths` listed for that section in `devport-output/workspace/{repo-slug}-section-plan.json`
 2. Read the actual source files at those paths under the snapshot directory
-3. Write a `SectionOutput` JSON file (see schema below) with the Write tool, named `{repo-slug}-section-N-output.json`
+3. Write a `SectionOutput` JSON file to `devport-output/workspace/{repo-slug}-section-N-output.json` using the Write tool
 4. Run persist-section to validate and persist it:
 
 ```bash
-npx tsx src/agent.ts persist-section --plan {repo-slug}-section-plan.json --section sec-1 --input {repo-slug}-section-1-output.json
+npx tsx src/agent.ts persist-section --plan devport-output/workspace/{repo-slug}-section-plan.json --section sec-1 --input devport-output/workspace/{repo-slug}-section-1-output.json
 ```
 
 Repeat for `sec-2`, `sec-3`, ... through all sections in the plan.
@@ -287,7 +288,7 @@ Repeat for `sec-2`, `sec-3`, ... through all sections in the plan.
 **Step 4: Finalize — cross-validate all sections and update the database:**
 
 ```bash
-npx tsx src/agent.ts finalize --plan {repo-slug}-section-plan.json --advance_baseline
+npx tsx src/agent.ts finalize --plan devport-output/workspace/{repo-slug}-section-plan.json --advance_baseline
 ```
 
 #### What you write per section (`SectionOutput`)
@@ -339,7 +340,7 @@ For each section, write a JSON file like `section-1-output.json` using the Write
 - No repeated content across sections (Jaccard similarity check)
 - Keep section/subsection IDs deterministic and non-overlapping
 
-**Naming convention for section output files:** Always prefix with the repo slug. Use `{repo-slug}-section-{N}-output.json` (e.g. `ollama-section-1-output.json`, `ollama-section-2-output.json`). Never use bare names like `section-1-output.json` — they collide when running in parallel.
+**Naming convention for section output files:** Always write to `devport-output/workspace/` with the repo slug prefix: `devport-output/workspace/{repo-slug}-section-{N}-output.json` (e.g. `devport-output/workspace/ollama-section-1-output.json`). Never write to the project root — it pollutes the working directory.
 
 ---
 
@@ -349,13 +350,13 @@ Use this only for small repos (< 200 files) where the overhead of section-at-a-t
 
 ```bash
 # Step 1: snapshot
-npx tsx src/agent.ts ingest --repo owner/repo --out {repo-slug}-artifact.json
+npx tsx src/agent.ts ingest --repo owner/repo --out devport-output/workspace/{repo-slug}-artifact.json
 
-# Step 2: YOU read {repo-slug}-artifact.json, read the snapshot files, generate GroundedAcceptedOutput
-# Write it to {repo-slug}-accepted-output.json
+# Step 2: YOU read devport-output/workspace/{repo-slug}-artifact.json, read the snapshot files, generate GroundedAcceptedOutput
+# Write it to devport-output/workspace/{repo-slug}-accepted-output.json
 
 # Step 3: package and save baseline
-npx tsx src/agent.ts package --input {repo-slug}-accepted-output.json --advance_baseline
+npx tsx src/agent.ts package --input devport-output/workspace/{repo-slug}-accepted-output.json --advance_baseline
 ```
 
 ### Incremental update
@@ -369,26 +370,26 @@ npx tsx src/agent.ts detect --repo owner/repo
 
 # If status=incremental or full-rebuild:
 # Step 2: re-snapshot at new HEAD
-npx tsx src/agent.ts ingest --repo owner/repo --out {repo-slug}-artifact.json
+npx tsx src/agent.ts ingest --repo owner/repo --out devport-output/workspace/{repo-slug}-artifact.json
 
 # Step 3: YOU read the snapshot and regenerate
 # For incremental: regenerate ONLY sections listed in impacted_section_ids from detect output
 # For full-rebuild: regenerate all sections
-# Write each section to {repo-slug}-section-N-output.json, then persist-section each one
-# Or for monolithic: write result to {repo-slug}-accepted-output.json
+# Write each section to devport-output/workspace/{repo-slug}-section-N-output.json, then persist-section each one
+# Or for monolithic: write result to devport-output/workspace/{repo-slug}-accepted-output.json
 
 # Step 4: package and advance baseline
-npx tsx src/agent.ts package --input {repo-slug}-accepted-output.json --advance_baseline
+npx tsx src/agent.ts package --input devport-output/workspace/{repo-slug}-accepted-output.json --advance_baseline
 ```
 
 ---
 
 ## What You Must Generate (`GroundedAcceptedOutput`)
 
-This is the JSON structure you write to `{repo-slug}-accepted-output.json`. Write it using the `Write` tool.
+This is the JSON structure you write to `devport-output/workspace/{repo-slug}-accepted-output.json`. Write it using the `Write` tool.
 
 **CRITICAL — Write the JSON directly. Do NOT write a Node.js, Python, or shell script to generate it.**
-Do not create `/tmp/gen_wiki.js` or any helper script. Do not use `cat >`, `echo`, `node -e`, or any shell command to produce the JSON. Use the `Write` tool to write the JSON to `{repo-slug}-accepted-output.json` directly, inline, in one shot. The JSON must be written by you as the AI, not generated by a script.
+Do not create `/tmp/gen_wiki.js` or any helper script. Do not use `cat >`, `echo`, `node -e`, or any shell command to produce the JSON. Use the `Write` tool to write the JSON to `devport-output/workspace/{repo-slug}-accepted-output.json` directly, inline, in one shot. The JSON must be written by you as the AI, not generated by a script.
 
 Every field is required. Do not omit any field. Do not add fields that aren't listed here.
 
@@ -490,8 +491,15 @@ Every field is required. Do not omit any field. Do not add fields that aren't li
 ## File Layout
 
 ```
-.planning/
-  ingestion-snapshots/        ← managed by `ingest`, do not edit manually
+devport-output/               ← gitignored, never commit this directory
+  workspace/                  ← intermediate files written by the AI agent
+    {repo-slug}-artifact.json
+    {repo-slug}-section-plan.json
+    {repo-slug}-section-1-output.json
+    {repo-slug}-section-2-output.json
+    ...
+
+  snapshots/                  ← managed by `ingest`, do not edit manually
     {owner}/
       {repo}/
         {commitSha}/
@@ -502,6 +510,11 @@ Every field is required. Do not omit any field. Do not add fields that aren't li
     {owner}/
       {repo}/
         delivery.json
+
+  chunked/                    ← session state for persist-section / finalize
+    {owner}/
+      {repo}/
+        session.json
 
   freshness/
     state.json                ← written by `package --advance_baseline`, read by `detect`
@@ -515,7 +528,7 @@ Every field is required. Do not omit any field. Do not add fields that aren't li
 |---------------|----------------|------------|
 | `--repo is required` | Missing `--repo` flag | Add `--repo owner/repo` to the command |
 | `OUT-04 validation failed: N) field: message` | Your JSON failed contract validation | Read the exact field name and message, fix that field in your output |
-| `No input provided. Pipe JSON or use --input` | Called `package` without input | Add `--input {repo-slug}-accepted-output.json` |
+| `No input provided. Pipe JSON or use --input` | Called `package` without input | Add `--input devport-output/workspace/{repo-slug}-accepted-output.json` |
 | `BASELINE_MISSING` | `package --advance_baseline` was never run for this repo | Run a full generation first with `--advance_baseline` |
 | `freshness baseline not saved: UPDT-02 ... missing section evidence paths` | A section is missing usable `sourcePaths` evidence | Ensure each section contains valid `sourcePaths` that exist in snapshot |
 | `GEN-01 violation: section count out of range` | Section count is outside beginner/trend target | Keep section count aligned with planned 4–6 range |

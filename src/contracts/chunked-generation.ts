@@ -4,7 +4,59 @@ const COMMIT_SHA_PATTERN = /^[a-f0-9]{7,40}$/;
 const REPO_REF_PATTERN = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/;
 
 // ── SectionPlanOutput ─────────────────────────────────────────────────────────
-// Output of `plan-sections`. Per-section file focus lists for chunked generation.
+// Output of `validate-plan`. Per-section file focus lists for chunked generation.
+
+// ── PlanContext ───────────────────────────────────────────────────────────────
+// Output of `plan-sections`. Provides context for the AI to generate its own plan.
+
+export const PlanContextProfileSchema = z
+  .object({
+    repoName: z.string().min(1),
+    primaryLanguage: z.string().min(1),
+    projectType: z.string().min(1),
+    domainHint: z.string().min(1),
+    topLevelDirs: z.array(z.string().min(1)),
+    filesScanned: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const PlanContextFileTreeEntrySchema = z
+  .object({
+    dir: z.string().min(1),
+    files: z.array(z.string().min(1)),
+    totalBytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const PlanContextConstraintsSchema = z
+  .object({
+    minSections: z.number().int().min(1),
+    maxSections: z.number().int().min(1),
+    minSubsectionsPerSection: z.number().int().min(1),
+    minBodyKoChars: z.number().int().min(1),
+    requiredElements: z.array(z.string().min(1)),
+    sectionIdPattern: z.string().min(1),
+    subsectionIdPattern: z.string().min(1),
+  })
+  .strict();
+
+export const PlanContextSchema = z
+  .object({
+    artifactType: z.literal("plan-context"),
+    repoFullName: z.string().regex(REPO_REF_PATTERN),
+    commitSha: z.string().regex(COMMIT_SHA_PATTERN),
+    ingestRunId: z.string().min(1),
+    snapshotPath: z.string().min(1),
+    generatedAt: z.string().datetime(),
+    profile: PlanContextProfileSchema,
+    readmeExcerpt: z.string(),
+    keyPaths: z.array(z.string().min(1)),
+    fileTree: z.array(PlanContextFileTreeEntrySchema),
+    constraints: PlanContextConstraintsSchema,
+  })
+  .strict();
+
+export type PlanContext = z.infer<typeof PlanContextSchema>;
 
 export const ChunkedSubsectionPlanSchema = z
   .object({

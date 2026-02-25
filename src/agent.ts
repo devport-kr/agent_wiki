@@ -42,8 +42,9 @@ import { extractSectionEvidenceFromAcceptedOutput } from "./freshness/section-ev
 import { loadFreshnessState, saveFreshnessState } from "./freshness/state";
 import { createPool, loadDbConfig, ensurePgVector, ensureHnswIndex } from "./persistence/db";
 import { persistWikiToDb } from "./persistence/persist-wiki";
-import { planSections } from "./chunked/plan-sections";
-import { SectionOutputSchema, SectionPlanOutputSchema } from "./contracts/chunked-generation";
+import { planContext } from "./chunked/plan-sections";
+import { validatePlan } from "./chunked/validate-plan";
+import { SectionOutputSchema, SectionPlanOutputSchema, PlanContextSchema } from "./contracts/chunked-generation";
 import { validateSection } from "./chunked/validate-section";
 import { persistSectionToDb } from "./chunked/persist-section";
 import { loadSession, initSession, saveSession, markSectionPersisted, sessionPathForRepo } from "./chunked/session";
@@ -264,7 +265,7 @@ async function detectCommand(flags: Record<string, string>): Promise<void> {
 
   process.stderr.write(
     `  → ${status}: ${detection.changed_paths.length} paths changed, ` +
-      `${mapped.impacted_section_ids.length} sections impacted\n`,
+    `${mapped.impacted_section_ids.length} sections impacted\n`,
   );
   if (mapped.impacted_section_ids.length > 0) {
     process.stderr.write(`  sections: ${mapped.impacted_section_ids.join(", ")}\n`);
@@ -393,7 +394,7 @@ async function packageCommand(flags: Record<string, string>): Promise<void> {
       // Delivery is already written — warn but don't fail
       process.stderr.write(
         `  ⚠ freshness baseline not saved: ${String(err)}\n` +
-          `    delivery.json is written; re-run package --advance_baseline after fixing citations\n`,
+        `    delivery.json is written; re-run package --advance_baseline after fixing citations\n`,
       );
     }
   }
@@ -495,7 +496,7 @@ async function persistCommand(flags: Record<string, string>): Promise<void> {
       } catch (err) {
         process.stderr.write(
           `  ⚠ freshness baseline not saved: ${String(err)}\n` +
-            `    DB writes succeeded; re-run persist --advance_baseline after fixing citations\n`,
+          `    DB writes succeeded; re-run persist --advance_baseline after fixing citations\n`,
         );
       }
     }
@@ -506,8 +507,8 @@ async function persistCommand(flags: Record<string, string>): Promise<void> {
 
 // ── plan-sections ────────────────────────────────────────────────────────────
 //
-// Analyzes a repo snapshot and produces a section plan with per-section focus
-// paths. Deterministic — no LLM calls.
+// Analyzes a repo snapshot and produces a PlanContext for the AI to generate
+// its own section plan. Deterministic — no LLM calls.
 
 async function planSectionsCommand(flags: Record<string, string>): Promise<void> {
   const artifactFile = requireFlag(flags, "artifact");
@@ -520,25 +521,70 @@ async function planSectionsCommand(flags: Record<string, string>): Promise<void>
     `[devport-agent] plan-sections: ${artifact.repo_ref} (${fmtNum(artifact.files_scanned)} files)\n`,
   );
 
-  const plan = await planSections(artifact);
+  const context = await planContext(artifact);
 
   process.stderr.write(
-    `  ✓ ${plan.totalSections} sections planned, ${plan.crossReferences.length} cross-references\n`,
+    `  ✓ plan context generated for ${context.profile.repoName}\n` +
+    `    type: ${context.profile.projectType}, lang: ${context.profile.primaryLanguage}, domain: ${context.profile.domainHint}\n` +
+    `    ${context.fileTree.length} directory groups, ${context.keyPaths.length} key paths\n` +
+    `    README excerpt: ${context.readmeExcerpt.length} chars\n`,
   );
 
-  for (const section of plan.sections) {
-    process.stderr.write(
-      `    ${section.sectionId}: ${section.titleKo} (${section.focusPaths.length} focus files, ${section.subsectionCount} subsections)\n`,
-    );
-  }
-
-  const json = `${JSON.stringify(plan, null, 2)}\n`;
+  const json = `${JSON.stringify(context, null, 2)}\n`;
 
   if (outFile) {
     const outPath = path.resolve(outFile);
     await mkdir(path.dirname(outPath), { recursive: true });
     await writeFile(outPath, json, "utf8");
-    process.stderr.write(`  plan → ${outPath}\n`);
+    process.stderr.write(`  context → ${outPath}\n`);
+  } else {
+    process.stdout.write(json);
+  }
+}
+
+// ── validate-plan ────────────────────────────────────────────────────────────
+//
+// Validates an AI-generated section plan against the SectionPlanOutput schema
+// and checks that focus paths exist in the snapshot. Deterministic.
+
+async function validatePlanCommand(flags: Record<string, string>): Promise<void> {
+  const inputFile = requireFlag(flags, "input");
+  const contextFile = requireFlag(flags, "context");
+  const outFile = flags["out"];
+
+  // Load context for snapshotPath
+  const contextRaw = await readFile(path.resolve(contextFile), "utf8");
+  const context = PlanContextSchema.parse(JSON.parse(contextRaw));
+
+  // Load AI's plan
+  const planRaw = await readFile(path.resolve(inputFile), "utf8");
+  const planJson = JSON.parse(planRaw);
+
+  process.stderr.write(
+    `[devport-agent] validate-plan: ${context.repoFullName}\n`,
+  );
+
+  const validated = validatePlan(planJson, {
+    snapshotPath: context.snapshotPath,
+  });
+
+  process.stderr.write(
+    `  ✓ plan validated: ${validated.totalSections} sections\n`,
+  );
+
+  for (const section of validated.sections) {
+    process.stderr.write(
+      `    ${section.sectionId}: ${section.titleKo} (${section.focusPaths.length} focus files, ${section.subsectionCount} subsections)\n`,
+    );
+  }
+
+  const json = `${JSON.stringify(validated, null, 2)}\n`;
+
+  if (outFile) {
+    const outPath = path.resolve(outFile);
+    await mkdir(path.dirname(outPath), { recursive: true });
+    await writeFile(outPath, json, "utf8");
+    process.stderr.write(`  validated plan → ${outPath}\n`);
   } else {
     process.stdout.write(json);
   }
@@ -591,7 +637,7 @@ async function persistSectionCommand(flags: Record<string, string>): Promise<voi
   if (validationErrors.length > 0) {
     throw new Error(
       `Section validation failed for ${sectionId} (${validationErrors.length} issue(s)):\n` +
-        validationErrors.map((e) => `  - ${e}`).join("\n"),
+      validationErrors.map((e) => `  - ${e}`).join("\n"),
     );
   }
 
@@ -626,7 +672,7 @@ async function persistSectionCommand(flags: Record<string, string>): Promise<voi
     if (projectResult.rows.length === 0) {
       throw new Error(
         `Project not found in database for repo_ref: ${plan.repoFullName}. ` +
-          `Ensure the project exists in the projects table with a matching full_name.`,
+        `Ensure the project exists in the projects table with a matching full_name.`,
       );
     }
 
@@ -669,7 +715,7 @@ async function persistSectionCommand(flags: Record<string, string>): Promise<voi
 
     process.stderr.write(
       `  ✓ ${sectionId}: ${result.chunksInserted} chunks embedded, ` +
-        `${sectionOutput.sourcePaths.length} source paths\n`,
+      `${sectionOutput.sourcePaths.length} source paths\n`,
     );
     process.stderr.write(`  session → ${sessionPath}\n`);
 
@@ -740,9 +786,9 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
 
     process.stderr.write(
       `  ✓ finalized: ${result.sectionsAssembled} sections, ` +
-        `${result.totalSubsections} subsections, ` +
-        `${result.totalSourceDocs} source docs, ${result.totalTrendFacts} trend facts, ` +
-        `${fmtNum(result.totalKoreanChars)} Korean chars\n`,
+      `${result.totalSubsections} subsections, ` +
+      `${result.totalSourceDocs} source docs, ${result.totalTrendFacts} trend facts, ` +
+      `${fmtNum(result.totalKoreanChars)} Korean chars\n`,
     );
   } finally {
     await pool.end();
@@ -786,36 +832,41 @@ function printHelp(): void {
       "           stdout: { status, changed_paths, impacted_section_ids, ... }",
       "           status values: noop | incremental | full-rebuild",
       "",
-       "  package  Validate AI-generated GroundedAcceptedOutput, write delivery.json",
-       "           --input accepted-output.json  (optional, reads stdin if omitted)",
-       "           --out_dir                     (default: devport-output/delivery)",
-       "           --quality_gate_level          standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
-       "           --advance_baseline            save freshness state for future detect",
-       "           --state_path                  (default: devport-output/freshness/state.json)",
-       "",
-       "  persist  Validate, embed, and write wiki directly to PostgreSQL + pgvector",
-       "           --input accepted-output.json  (optional, reads stdin if omitted)",
-       "           --quality_gate_level          standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
-       "           --advance_baseline            save freshness state for future detect",
-       "           --state_path                  (default: devport-output/freshness/state.json)",
+      "  package  Validate AI-generated GroundedAcceptedOutput, write delivery.json",
+      "           --input accepted-output.json  (optional, reads stdin if omitted)",
+      "           --out_dir                     (default: devport-output/delivery)",
+      "           --quality_gate_level          standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
+      "           --advance_baseline            save freshness state for future detect",
+      "           --state_path                  (default: devport-output/freshness/state.json)",
+      "",
+      "  persist  Validate, embed, and write wiki directly to PostgreSQL + pgvector",
+      "           --input accepted-output.json  (optional, reads stdin if omitted)",
+      "           --quality_gate_level          standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
+      "           --advance_baseline            save freshness state for future detect",
+      "           --state_path                  (default: devport-output/freshness/state.json)",
       "           Requires: OPENAI_API_KEY, DEVPORT_DB_* env vars (or defaults to docker-compose)",
       "",
-      "  plan-sections  Analyze repo structure and produce a section plan with focus paths",
+      "  plan-sections  Analyze repo and produce planning context for AI section generation",
       "                 --artifact artifact.json  (required)",
-      "                 --out section-plan.json   (optional, prints to stdout if omitted)",
+      "                 --out plan-context.json   (optional, prints to stdout if omitted)",
       "",
-       "  persist-section  Validate and persist a single section to the database",
-       "                   --plan section-plan.json   (required)",
-       "                   --section sec-1            (required)",
-       "                   --input section-1.json     (required)",
-       "                   --quality_gate_level       standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
-       "                   --session session.json     (optional, auto-derived from repo name)",
-       "                   Requires: OPENAI_API_KEY, DEVPORT_DB_* env vars",
-       "",
-       "  finalize  Cross-validate all sections and update snapshot/draft tables",
-       "            --plan section-plan.json   (required)",
-       "            --quality_gate_level       standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
-       "            --session session.json     (optional, auto-derived from repo name)",
+      "  validate-plan  Validate an AI-generated section plan against the schema",
+      "                 --input section-plan.json    (required)",
+      "                 --context plan-context.json  (required)",
+      "                 --out section-plan.json      (optional, prints to stdout if omitted)",
+      "",
+      "  persist-section  Validate and persist a single section to the database",
+      "                   --plan section-plan.json   (required)",
+      "                   --section sec-1            (required)",
+      "                   --input section-1.json     (required)",
+      "                   --quality_gate_level       standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
+      "                   --session session.json     (optional, auto-derived from repo name)",
+      "                   Requires: OPENAI_API_KEY, DEVPORT_DB_* env vars",
+      "",
+      "  finalize  Cross-validate all sections and update snapshot/draft tables",
+      "            --plan section-plan.json   (required)",
+      "            --quality_gate_level       standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
+      "            --session session.json     (optional, auto-derived from repo name)",
       "            --advance_baseline         save freshness state for future detect",
       "            --state_path               (default: devport-output/freshness/state.json)",
       "            Requires: OPENAI_API_KEY, DEVPORT_DB_* env vars",
@@ -828,10 +879,12 @@ function printHelp(): void {
       "",
       "Chunked workflow (higher quality, section-at-a-time):",
       "  1. npx tsx src/agent.ts ingest --repo owner/repo --out artifact.json",
-      "  2. npx tsx src/agent.ts plan-sections --artifact artifact.json --out section-plan.json",
-      "  3. For each section: AI reads focus files, writes section-N.json",
+      "  2. npx tsx src/agent.ts plan-sections --artifact artifact.json --out plan-context.json",
+      "  3. AI reads plan-context.json + README + code, generates section-plan.json",
+      "  4. npx tsx src/agent.ts validate-plan --input section-plan.json --context plan-context.json --out section-plan.json",
+      "  5. For each section: AI reads focus files, writes section-N.json",
       "     npx tsx src/agent.ts persist-section --plan section-plan.json --section sec-N --input section-N.json",
-      "  4. npx tsx src/agent.ts finalize --plan section-plan.json --advance_baseline",
+      "  6. npx tsx src/agent.ts finalize --plan section-plan.json --advance_baseline",
       "",
       "Incremental update workflow:",
       "  1. npx tsx src/agent.ts detect --repo owner/repo",
@@ -883,6 +936,11 @@ async function main(): Promise<void> {
 
   if (command === "plan-sections") {
     await planSectionsCommand(flags);
+    return;
+  }
+
+  if (command === "validate-plan") {
+    await validatePlanCommand(flags);
     return;
   }
 

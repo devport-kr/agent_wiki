@@ -2,15 +2,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
-  SectionPlanOutputSchema,
-  type ChunkedSectionPlanEntry,
-  type ChunkedSubsectionPlan,
-  type SectionPlanOutput,
+  PlanContextSchema,
+  type PlanContext,
 } from "../contracts/chunked-generation";
 import type { IngestRunArtifact } from "../ingestion/types";
 
-const MAX_FOCUS_PATHS_PER_SECTION = 30;
-const MAX_SECTION_COUNT = 6;
+const MAX_README_CHARS = 3000;
+const MAX_FILES_PER_DIR = 30;
 
 const SKIP_DIRS = new Set([".git", ".husky", "node_modules", "dist", ".next", "target"]);
 
@@ -19,101 +17,86 @@ interface FileEntry {
   bytes: number;
 }
 
-interface SectionTemplate {
-  sectionId: string;
-  titleKo: string;
-  summaryKo: string;
-  keywords: string[];
-  hintPaths: string[];
-  subsectionKinds: Array<Array<"code" | "config" | "tests" | "docs">>;
-}
+// ── Repo profiling ──────────────────────────────────────────────────────────
 
-interface SectionTemplateSeed {
-  titleKo: string;
-  summaryKo: string;
-  keywords: string[];
-  hintPaths: string[];
-  subsectionKinds: Array<Array<"code" | "config" | "tests" | "docs">>;
-}
+type ProjectType =
+  | "cli-tool"
+  | "cli-server"
+  | "server"
+  | "web-app"
+  | "library"
+  | "native-system"
+  | "project";
 
-const BASE_TEMPLATE_SEEDS: SectionTemplateSeed[] = [
-  {
-    titleKo: "입문자 빠른 시작과 저장소 지도",
-    summaryKo:
-      "이 섹션은 저장소를 처음 읽는 개발자가 어떤 파일부터 확인해야 하는지와 기본 실행 맥락을 안내합니다.",
-    keywords: ["readme", "getting-started", "guide", "agent", "main", "index"],
-    hintPaths: ["README.md", "docs/getting-started.md", "src/agent.ts", "package.json"],
-    subsectionKinds: [["docs", "code"], ["code", "config"], ["docs", "code"]],
-  },
-  {
-    titleKo: "실행 아키텍처와 핵심 호출 흐름",
-    summaryKo:
-      "이 섹션은 핵심 오케스트레이션 계층의 호출 순서와 구성요소 경계를 아키텍처 관점에서 설명합니다.",
-    keywords: ["orchestration", "pipeline", "chunked", "package", "validate", "finalize"],
-    hintPaths: [
-      "src/orchestration/package-delivery.ts",
-      "src/chunked/plan-sections.ts",
-      "src/chunked/persist-section.ts",
-      "src/chunked/finalize.ts",
-    ],
-    subsectionKinds: [["code"], ["code", "config"], ["code", "tests"]],
-  },
-  {
-    titleKo: "핵심 기능 구현과 데이터 경로",
-    summaryKo:
-      "이 섹션은 계약 스키마, 신선도 추적, 패키징 로직이 어떤 데이터 경로를 따라 연결되는지 설명합니다.",
-    keywords: ["contracts", "freshness", "packaging", "persistence", "ingestion"],
-    hintPaths: [
-      "src/contracts/wiki-generation.ts",
-      "src/contracts/chunked-generation.ts",
-      "src/contracts/wiki-freshness.ts",
-      "src/freshness/section-evidence.ts",
-    ],
-    subsectionKinds: [["code", "config"], ["code"], ["code", "tests"]],
-  },
-  {
-    titleKo: "최근 트렌드와 공식 문서 변화",
-    summaryKo:
-      "이 섹션은 릴리스/태그 변화와 공식 문서 경로를 기반으로 최근 트렌드 신호를 정리합니다.",
-    keywords: ["trend", "release", "tag", "changelog", "official-docs", "docs"],
-    hintPaths: [
-      "__devport__/trends/releases.json",
-      "__devport__/trends/tags.json",
-      "__devport__/official-docs/index.json",
-      "CHANGELOG.md",
-      "docs/",
-    ],
-    subsectionKinds: [["docs"], ["docs", "code"], ["docs", "tests"]],
-  },
+const LANG_KO_MAP: Record<string, string> = {
+  "Go": "Go", "TypeScript": "TypeScript", "JavaScript": "JavaScript",
+  "Python": "Python", "Rust": "Rust", "C": "C", "C++": "C++", "Java": "Java",
+  "Kotlin": "Kotlin", "Swift": "Swift", "Ruby": "Ruby", "PHP": "PHP",
+  "C#": "C#", "Dart": "Dart", "Elixir": "Elixir", "Scala": "Scala", "Zig": "Zig",
+};
+
+const DOMAIN_HINTS: Array<{ patterns: string[]; hintKo: string }> = [
+  { patterns: ["model", "inference", "llm", "ai", "ml", "neural", "torch", "tensorflow"], hintKo: "AI/ML 모델 추론" },
+  { patterns: ["runner", "scheduler", "executor", "orchestrat"], hintKo: "작업 실행 및 스케줄링" },
+  { patterns: ["database", "db", "storage", "redis", "mongo", "sql", "cache", "kv"], hintKo: "데이터 저장소" },
+  { patterns: ["network", "http", "grpc", "rpc", "protocol", "proxy", "gateway"], hintKo: "네트워크 통신" },
+  { patterns: ["auth", "oauth", "credential", "token", "session"], hintKo: "인증 및 보안" },
+  { patterns: ["container", "docker", "kubernetes", "k8s", "pod"], hintKo: "컨테이너 오케스트레이션" },
+  { patterns: ["compiler", "parser", "ast", "lexer", "syntax", "lang"], hintKo: "언어 처리 및 컴파일" },
+  { patterns: ["render", "ui", "component", "widget", "canvas", "graphics"], hintKo: "UI 렌더링" },
+  { patterns: ["crypto", "encrypt", "hash", "cipher", "tls", "ssl"], hintKo: "암호화 및 보안" },
+  { patterns: ["stream", "event", "queue", "message", "pubsub", "kafka"], hintKo: "이벤트/스트림 처리" },
+  { patterns: ["api", "rest", "endpoint", "route", "handler"], hintKo: "API 서비스" },
+  { patterns: ["agent", "tool", "prompt", "chain", "rag", "embed"], hintKo: "AI 에이전트" },
+  { patterns: ["build", "bundle", "webpack", "vite", "rollup", "esbuild"], hintKo: "빌드 도구" },
+  { patterns: ["plugin", "extension", "addon", "module", "hook"], hintKo: "플러그인 시스템" },
+  { patterns: ["cli", "cmd", "command", "terminal", "shell"], hintKo: "명령줄 인터페이스" },
 ];
 
-const OPTIONAL_TEMPLATE_SEEDS: SectionTemplateSeed[] = [
-  {
-    titleKo: "검증 전략과 운영 품질 게이트",
-    summaryKo:
-      "이 섹션은 테스트 구성, 품질 점수, 엄격 모드 검증 경로를 연결해 운영 안정성 확보 방법을 설명합니다.",
-    keywords: ["test", "spec", "quality", "gate", "scorecard", "strict"],
-    hintPaths: [
-      "tests/e2e-quality-first-smoke.spec.ts",
-      "tests/wiki-delivery-packaging.spec.ts",
-      "src/quality/scorecard.ts",
-      "src/chunked/validate-section.ts",
-    ],
-    subsectionKinds: [["tests"], ["code", "tests"], ["config", "tests"]],
-  },
-  {
-    titleKo: "확장 포인트와 기여 가이드",
-    summaryKo:
-      "이 섹션은 외부 확장 가능 지점과 문서화된 기여 흐름을 정리해 유지보수/확장 관점을 제공합니다.",
-    keywords: ["guideline", "agents", "readme", "contrib", "plugin", "extension"],
-    hintPaths: ["AGENTS.md", "GUIDELINE.md", "README.md", "docs/"],
-    subsectionKinds: [["docs"], ["code", "docs"], ["docs", "tests"]],
-  },
-];
-
-function compareDeterministic(left: string, right: string): number {
-  return left.localeCompare(right, "en", { numeric: true, sensitivity: "base" });
+function detectPrimaryLanguage(languageMix: Record<string, number>): string {
+  const entries = Object.entries(languageMix).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return "Unknown";
+  return entries[0][0];
 }
+
+function detectProjectType(topDirs: string[], primaryLang: string): ProjectType {
+  const dirSet = new Set(topDirs.map((d) => d.toLowerCase()));
+
+  const hasCli = dirSet.has("cmd") || dirSet.has("cli") || dirSet.has("bin");
+  const hasServer = dirSet.has("server") || dirSet.has("api") || dirSet.has("routes");
+  const hasWebApp = dirSet.has("app") || dirSet.has("pages") || dirSet.has("components") || dirSet.has("views");
+  const hasLib = dirSet.has("lib") || dirSet.has("pkg") || dirSet.has("crate") || dirSet.has("packages");
+  const isNative = ["C", "C++", "Zig", "Rust"].includes(primaryLang) && (dirSet.has("deps") || dirSet.has("vendor"));
+
+  if (hasCli && hasServer) return "cli-server";
+  if (hasCli) return "cli-tool";
+  if (hasServer && hasWebApp) return "web-app";
+  if (hasServer) return "server";
+  if (hasWebApp) return "web-app";
+  if (isNative) return "native-system";
+  if (hasLib) return "library";
+  return "project";
+}
+
+function detectDomainHint(topDirs: string[], keyPaths: string[]): string {
+  const tokens = [
+    ...topDirs.map((d) => d.toLowerCase()),
+    ...keyPaths.flatMap((p) => p.toLowerCase().split("/")),
+  ];
+
+  let bestHint = "핵심 기능";
+  let bestScore = 0;
+  for (const { patterns, hintKo } of DOMAIN_HINTS) {
+    const score = patterns.filter((p) => tokens.some((t) => t.includes(p))).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestHint = hintKo;
+    }
+  }
+  return bestHint;
+}
+
+// ── File scanning ───────────────────────────────────────────────────────────
 
 function normalizeRepoPath(value: string): string {
   return value
@@ -167,181 +150,113 @@ async function collectFiles(rootPath: string): Promise<FileEntry[]> {
   return entries;
 }
 
-function sectionIdFromIndex(index: number): string {
-  return `sec-${index + 1}`;
+// ── File tree builder ───────────────────────────────────────────────────────
+
+interface FileTreeEntry {
+  dir: string;
+  files: string[];
+  totalBytes: number;
 }
 
-function pickTemplates(filesScanned: number): SectionTemplate[] {
-  const seeds: SectionTemplateSeed[] = [...BASE_TEMPLATE_SEEDS];
+function buildFileTree(files: FileEntry[]): FileTreeEntry[] {
+  const byDir = new Map<string, { files: string[]; totalBytes: number }>();
 
-  if (filesScanned >= 120) {
-    seeds.push(OPTIONAL_TEMPLATE_SEEDS[0]);
-  }
-  if (filesScanned >= 400) {
-    seeds.push(OPTIONAL_TEMPLATE_SEEDS[1]);
-  }
-
-  return seeds.slice(0, MAX_SECTION_COUNT).map((seed, index) => ({
-    sectionId: sectionIdFromIndex(index),
-    titleKo: seed.titleKo,
-    summaryKo: seed.summaryKo,
-    keywords: seed.keywords,
-    hintPaths: seed.hintPaths,
-    subsectionKinds: seed.subsectionKinds,
-  }));
-}
-
-function buildSubsections(template: SectionTemplate): ChunkedSubsectionPlan[] {
-  const sectionNumber = template.sectionId.replace("sec-", "");
-
-  return [
-    {
-      subsectionId: `sub-${sectionNumber}-1`,
-      titleKo: `${template.titleKo} - 구조와 책임`,
-      objectiveKo: "핵심 파일 배치와 모듈 책임을 먼저 파악하고 입문자가 따라갈 기본 맥락을 제공합니다.",
-      targetEvidenceKinds: template.subsectionKinds[0] ?? ["code"],
-      targetCharacterCount: 3000,
-    },
-    {
-      subsectionId: `sub-${sectionNumber}-2`,
-      titleKo: `${template.titleKo} - 실행/데이터 흐름`,
-      objectiveKo: "중요 호출 체인과 데이터 이동 경로를 추적해 실제 동작 관점의 이해를 제공합니다.",
-      targetEvidenceKinds: template.subsectionKinds[1] ?? ["code", "config"],
-      targetCharacterCount: 3000,
-    },
-    {
-      subsectionId: `sub-${sectionNumber}-3`,
-      titleKo: `${template.titleKo} - 검증과 변경 포인트`,
-      objectiveKo: "테스트 근거와 변경 민감 지점을 연결해 향후 수정 시 확인해야 할 체크포인트를 제공합니다.",
-      targetEvidenceKinds: template.subsectionKinds[2] ?? ["tests", "docs"],
-      targetCharacterCount: 3000,
-    },
-  ];
-}
-
-function buildFocusPaths(
-  template: SectionTemplate,
-  files: FileEntry[],
-  filePathSet: Set<string>,
-  keyPaths: string[],
-): string[] {
-  const selected: string[] = [];
-  const seen = new Set<string>();
-  const normalizedKeywords = template.keywords.map((keyword) => keyword.toLowerCase());
-
-  const addPath = (candidate: string): void => {
-    const normalized = normalizeRepoPath(candidate);
-    if (!normalized || seen.has(normalized)) {
-      return;
+  for (const file of files) {
+    const parts = file.relativePath.split("/");
+    const dir = parts.length > 1 ? parts[0] : ".";
+    const entry = byDir.get(dir) ?? { files: [], totalBytes: 0 };
+    entry.totalBytes += file.bytes;
+    if (entry.files.length < MAX_FILES_PER_DIR) {
+      entry.files.push(file.relativePath);
     }
-
-    if (normalized.endsWith("/")) {
-      for (const file of files) {
-        if (file.relativePath.startsWith(normalized) && !seen.has(file.relativePath)) {
-          seen.add(file.relativePath);
-          selected.push(file.relativePath);
-        }
-      }
-      return;
-    }
-
-    if (!filePathSet.has(normalized)) {
-      return;
-    }
-
-    seen.add(normalized);
-    selected.push(normalized);
-  };
-
-  for (const hintPath of template.hintPaths) {
-    addPath(hintPath);
+    byDir.set(dir, entry);
   }
 
-  const keywordMatchedFiles = files
-    .filter((file) => {
-      const lowered = file.relativePath.toLowerCase();
-      return normalizedKeywords.some((keyword) => lowered.includes(keyword));
-    })
-    .sort((left, right) => {
-      if (right.bytes !== left.bytes) {
-        return right.bytes - left.bytes;
-      }
-      return compareDeterministic(left.relativePath, right.relativePath);
-    });
-
-  for (const file of keywordMatchedFiles) {
-    addPath(file.relativePath);
-  }
-
-  for (const keyPath of keyPaths) {
-    addPath(keyPath);
-  }
-
-  const fallbackFiles = files
-    .slice()
-    .sort((left, right) => {
-      if (right.bytes !== left.bytes) {
-        return right.bytes - left.bytes;
-      }
-      return compareDeterministic(left.relativePath, right.relativePath);
-    });
-
-  for (const file of fallbackFiles) {
-    addPath(file.relativePath);
-  }
-
-  return selected.slice(0, MAX_FOCUS_PATHS_PER_SECTION);
+  return Array.from(byDir.entries())
+    .map(([dir, data]) => ({ dir, files: data.files, totalBytes: data.totalBytes }))
+    .sort((a, b) => b.totalBytes - a.totalBytes);
 }
 
-function buildCrossReferences(
-  sections: ChunkedSectionPlanEntry[],
-): Array<{ fromSectionId: string; toSectionId: string; relation: string }> {
-  const references: Array<{ fromSectionId: string; toSectionId: string; relation: string }> = [];
-  for (let index = 0; index < sections.length - 1; index += 1) {
-    references.push({
-      fromSectionId: sections[index].sectionId,
-      toSectionId: sections[index + 1].sectionId,
-      relation: "다음 섹션에서 연결된 구현 세부를 설명합니다",
-    });
+// ── README reader ───────────────────────────────────────────────────────────
+
+async function readReadmeExcerpt(snapshotPath: string): Promise<string> {
+  const candidates = ["README.md", "readme.md", "Readme.md", "README.rst", "README.txt", "README"];
+  for (const name of candidates) {
+    try {
+      const content = await fs.readFile(path.join(snapshotPath, name), "utf8");
+      return content.slice(0, MAX_README_CHARS);
+    } catch {
+      // Try next candidate.
+    }
   }
-  return references;
+  return "";
 }
 
-export async function planSections(artifact: IngestRunArtifact): Promise<SectionPlanOutput> {
+// ── Main export ─────────────────────────────────────────────────────────────
+
+function compareDeterministic(left: string, right: string): number {
+  return left.localeCompare(right, "en", { numeric: true, sensitivity: "base" });
+}
+
+export async function planContext(artifact: IngestRunArtifact): Promise<PlanContext> {
   const files = await collectFiles(artifact.snapshot_path);
-  const filePathSet = new Set(files.map((file) => file.relativePath));
   const keyPaths = (artifact.metadata.key_paths ?? [])
     .map((value) => normalizeRepoPath(value))
     .filter((value) => value.length > 0)
     .sort(compareDeterministic);
 
-  const templates = pickTemplates(artifact.files_scanned);
+  // Extract top-level directories
+  const topDirSet = new Set<string>();
+  for (const file of files) {
+    const firstSegment = file.relativePath.split("/")[0];
+    if (firstSegment && firstSegment !== file.relativePath) {
+      topDirSet.add(firstSegment);
+    }
+  }
+  const topDirs = Array.from(topDirSet).sort(compareDeterministic);
 
-  const sections: ChunkedSectionPlanEntry[] = templates.map((template) => {
-    const subsections = buildSubsections(template);
-    return {
-      sectionId: template.sectionId,
-      titleKo: template.titleKo,
-      summaryKo: template.summaryKo,
-      focusPaths: buildFocusPaths(template, files, filePathSet, keyPaths),
-      subsectionCount: subsections.length,
-      subsections,
-    };
-  });
+  // Build profile
+  const primaryLanguage = detectPrimaryLanguage(artifact.metadata.language_mix);
+  const projectType = detectProjectType(topDirs, primaryLanguage);
+  const domainHint = detectDomainHint(topDirs, keyPaths);
+  const repoRef = artifact.repo_ref;
+  const repoName = repoRef.includes("/") ? repoRef.split("/")[1] : repoRef;
+  const displayName = repoName.charAt(0).toUpperCase() + repoName.slice(1);
 
-  const plan: SectionPlanOutput = {
-    artifactType: "chunked-section-plan",
+  // Read README
+  const readmeExcerpt = await readReadmeExcerpt(artifact.snapshot_path);
+
+  // Build file tree
+  const fileTree = buildFileTree(files);
+
+  const context: PlanContext = {
+    artifactType: "plan-context",
     repoFullName: artifact.repo_ref.toLowerCase(),
     commitSha: artifact.commit_sha,
     ingestRunId: artifact.ingest_run_id,
     snapshotPath: artifact.snapshot_path,
     generatedAt: new Date().toISOString(),
-    overviewKo:
-      "이 플랜은 입문자 관점의 빠른 이해를 우선으로 구성되며, 아키텍처 설명과 트렌드 신호를 함께 포함하는 4-6개 섹션 템플릿을 제공합니다.",
-    totalSections: sections.length,
-    sections,
-    crossReferences: buildCrossReferences(sections),
+    profile: {
+      repoName: displayName,
+      primaryLanguage,
+      projectType,
+      domainHint,
+      topLevelDirs: topDirs,
+      filesScanned: artifact.files_scanned,
+    },
+    readmeExcerpt,
+    keyPaths,
+    fileTree,
+    constraints: {
+      minSections: 4,
+      maxSections: 6,
+      minSubsectionsPerSection: 3,
+      minBodyKoChars: 3000,
+      requiredElements: ["mermaid-architecture"],
+      sectionIdPattern: "sec-{N} where N starts at 1",
+      subsectionIdPattern: "sub-{sectionN}-{subN} (e.g. sub-1-1, sub-1-2, sub-2-1)",
+    },
   };
 
-  return SectionPlanOutputSchema.parse(plan);
+  return PlanContextSchema.parse(context);
 }

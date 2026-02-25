@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { finalize } from "../src/chunked/finalize";
-import { planSections } from "../src/chunked/plan-sections";
+import { planContext } from "../src/chunked/plan-sections";
 import { runIngest } from "../src/ingestion/run";
 import type { GitHubResolver } from "../src/ingestion/github";
 import { isLikelyCommitSha } from "../src/ingestion/ref";
@@ -277,7 +277,7 @@ describe("quality-first e2e smoke", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("plans beginner-trend sections including architecture and trend section", async () => {
+  it("produces plan context with profile and constraints for AI section generation", async () => {
     const snapshotRoot = mkdtempSync(join(tmpdir(), "devport-e2e-quality-first-plan-"));
     const sourceRoot = createSourceFixture();
 
@@ -297,18 +297,22 @@ describe("quality-first e2e smoke", () => {
         },
       );
 
-      const plan = await planSections(artifact);
-      expect(plan.totalSections).toBeGreaterThanOrEqual(4);
-      expect(plan.totalSections).toBeLessThanOrEqual(6);
-      expect(plan.sections.some((section) => section.titleKo.includes("아키텍처"))).toBe(true);
-      expect(plan.sections.some((section) => section.titleKo.includes("트렌드"))).toBe(true);
+      const context = await planContext(artifact);
+      expect(context.artifactType).toBe("plan-context");
+      expect(context.profile.repoName).toBe("Widget");
+      expect(context.profile.primaryLanguage).toBe("TypeScript");
+      expect(context.constraints.minSections).toBe(4);
+      expect(context.constraints.maxSections).toBe(6);
+      expect(context.constraints.minSubsectionsPerSection).toBe(3);
+      expect(context.fileTree.length).toBeGreaterThan(0);
+      expect(context.keyPaths.length).toBeGreaterThan(0);
     } finally {
       rmSync(snapshotRoot, { recursive: true, force: true });
       rmSync(sourceRoot, { recursive: true, force: true });
     }
   });
 
-  it("runs ingest -> plan-sections(v2) -> package with strict quality gate", async () => {
+  it("runs ingest -> plan-context -> package with strict quality gate", async () => {
     const snapshotRoot = mkdtempSync(join(tmpdir(), "devport-e2e-quality-first-snapshots-"));
     const sourceRoot = createSourceFixture();
 
@@ -328,9 +332,9 @@ describe("quality-first e2e smoke", () => {
         },
       );
 
-      const plan = await planSections(artifact);
-      expect(plan.sections.length).toBeGreaterThanOrEqual(4);
-      expect(plan.sections.length).toBeLessThanOrEqual(6);
+      const context = await planContext(artifact);
+      expect(context.artifactType).toBe("plan-context");
+      expect(context.profile.filesScanned).toBeGreaterThan(0);
 
       const accepted = createAcceptedOutput(artifact.commit_sha);
       const packaged = packageAcceptedOutputsForDelivery([accepted], {

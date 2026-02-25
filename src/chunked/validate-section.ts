@@ -89,5 +89,44 @@ export function validateSection(
     }
   }
 
+  // ── Prefix-repetition padding detection ───────────────────────────────────
+  // Catches filler lines that share an identical prefix but vary in suffix,
+  // e.g. "지금 항목 식별자는 sec-1/sub-1-1/1이다. ..." repeated 18 times.
+  const PREFIX_LENGTH = 20;
+  const PREFIX_REPEAT_THRESHOLD = 5;
+  for (const sub of section.subsections) {
+    const lines = sub.bodyKo
+      .split(/[\n\r]+/)
+      .map((line) => line.trim())
+      .filter((line) => line.length >= PREFIX_LENGTH);
+
+    const prefixCounts = new Map<string, number>();
+    for (const line of lines) {
+      const prefix = line.slice(0, PREFIX_LENGTH);
+      prefixCounts.set(prefix, (prefixCounts.get(prefix) ?? 0) + 1);
+    }
+
+    for (const [prefix, count] of prefixCounts) {
+      if (count >= PREFIX_REPEAT_THRESHOLD) {
+        errors.push(
+          `${sub.subsectionId} (${section.sectionId}): padding detected — line prefix "${prefix}..." repeated ${count} times. Write unique content instead of filler lines.`,
+        );
+        break; // one error per subsection is enough
+      }
+    }
+  }
+
+  // ── Escaped newline padding detection ─────────────────────────────────────
+  // Catches bodyKo that uses literal "\\n" sequences to pad content instead of
+  // real line breaks. This indicates raw string concatenation padding.
+  for (const sub of section.subsections) {
+    const escapedNewlineCount = (sub.bodyKo.match(/\\\\n/g) ?? []).length;
+    if (escapedNewlineCount >= 5) {
+      errors.push(
+        `${sub.subsectionId} (${section.sectionId}): bodyKo contains ${escapedNewlineCount} escaped newline sequences (\\\\n). Use real line breaks and write genuine content.`,
+      );
+    }
+  }
+
   return errors;
 }

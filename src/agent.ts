@@ -761,38 +761,18 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
     `[devport-agent] finalize: ${plan.repoFullName} (session ${session.sessionId})\n`,
   );
 
-  // Connect to PostgreSQL
-  const pool = createPool(loadDbConfig());
+  const result = await finalize(session, plan, {
+    advanceBaseline,
+    statePath,
+    s3FreshnessOptions: s3FreshnessOptions(finalizeStorageConfig, statePath),
+  });
 
-  try {
-    await ensurePgVector(pool);
-    await ensureHnswIndex(pool);
-
-    const apiKey = process.env["OPENAI_API_KEY"];
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY environment variable is required for finalize command");
-    }
-
-    const { default: OpenAI } = await import("openai");
-    const openai = new OpenAI({ apiKey });
-
-    const result = await finalize(session, plan, {
-      pool,
-      openai,
-      advanceBaseline,
-      statePath,
-      s3FreshnessOptions: s3FreshnessOptions(finalizeStorageConfig, statePath),
-    });
-
-    process.stderr.write(
-      `  ✓ finalized: ${result.sectionsAssembled} sections, ` +
-      `${result.totalSubsections} subsections, ` +
-      `${result.totalSourceDocs} source docs, ${result.totalTrendFacts} trend facts, ` +
-      `${fmtNum(result.totalKoreanChars)} Korean chars\n`,
-    );
-  } finally {
-    await pool.end();
-  }
+  process.stderr.write(
+    `  ✓ finalized: ${result.sectionsAssembled} sections, ` +
+    `${result.totalSubsections} subsections, ` +
+    `${result.totalSourceDocs} source docs, ${result.totalTrendFacts} trend facts, ` +
+    `${fmtNum(result.totalKoreanChars)} Korean chars\n`,
+  );
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

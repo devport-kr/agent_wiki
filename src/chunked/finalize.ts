@@ -1,7 +1,5 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type pg from "pg";
-import type OpenAI from "openai";
 
 import type {
   ChunkedSession,
@@ -18,8 +16,6 @@ import { loadFreshnessState, saveFreshnessState } from "../freshness/state";
 import type { S3JsonAdapter } from "../shared/s3-storage";
 
 export interface FinalizeOptions {
-  pool: pg.Pool;
-  openai: OpenAI;
   advanceBaseline: boolean;
   statePath: string;
   s3FreshnessOptions?: { adapter: S3JsonAdapter; key: string };
@@ -32,15 +28,6 @@ export interface FinalizeResult {
   totalTrendFacts: number;
   totalKoreanChars: number;
 }
-
-const LEGACY_SECTION_COLUMNS = [
-  "what_section",
-  "how_section",
-  "architecture_section",
-  "releases_section",
-  "activity_section",
-  "chat_section",
-];
 
 /**
  * Loads all section output files from the session and validates their schema.
@@ -164,79 +151,15 @@ function assembleAcceptedOutput(
 }
 
 /**
- * Builds JSONB section array for project_wiki_snapshots (same pattern as persist-wiki.ts).
- */
-function buildSectionsJsonb(
-  sections: SectionOutput[],
-  commitSha: string,
-): Array<Record<string, unknown>> {
-  return sections.map((section, index) => {
-    const subsections = section.subsections
-      .slice()
-      .sort((a, b) => a.subsectionId.localeCompare(b.subsectionId, "en", { numeric: true }));
-
-    const deepDiveParts = subsections.map(
-      (sub) => `## ${sub.titleKo}\n\n${sub.bodyKo}`,
-    );
-
-    return {
-      sectionId: section.sectionId,
-      heading: section.titleKo,
-      anchor: section.sectionId,
-      summary: section.summaryKo,
-      deepDiveMarkdown: deepDiveParts.join("\n\n"),
-      defaultExpanded: false,
-      order: index,
-      metadata: {
-        commitSha,
-        subsectionCount: subsections.length,
-      },
-    };
-  });
-}
-
-function buildCurrentCounters(
-  sections: SectionOutput[],
-  totalKoreanChars: number,
-): Record<string, unknown> {
-  const subsectionCount = sections.reduce((sum, s) => sum + s.subsections.length, 0);
-  const sourceDocCount = new Set(
-    sections.flatMap((section) => section.sourcePaths.map((sourcePath) => sourcePath.trim())),
-  ).size;
-
-  return {
-    sectionCount: sections.length,
-    subsectionCount,
-    sourceDocCount,
-    trendFactCount: 0,
-    totalKoreanChars: totalKoreanChars,
-  };
-}
-
-async function hasLegacySnapshotColumns(pool: pg.Pool): Promise<boolean> {
-  const result = await pool.query<{ column_name: string }>(
-    `
-      SELECT column_name
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'project_wiki_snapshots'
-        AND column_name = ANY($1::text[])
-    `,
-    [LEGACY_SECTION_COLUMNS],
-  );
-  return result.rows.length === LEGACY_SECTION_COLUMNS.length;
-}
-
-/**
  * Finalize: runs after all sections are persisted.
- * Validates the complete wiki and updates snapshot/draft tables.
+ * Runs cross-section validation and optionally advances the freshness baseline.
  */
 export async function finalize(
   session: ChunkedSession,
   plan: SectionPlanOutput,
   options: FinalizeOptions,
 ): Promise<FinalizeResult> {
-  const { pool, advanceBaseline, statePath, s3FreshnessOptions } = options;
+  const { advanceBaseline, statePath, s3FreshnessOptions } = options;
 
   // 1. Verify all sections are persisted
   const pendingSections = Object.entries(session.sections)
@@ -261,122 +184,10 @@ export async function finalize(
     );
   }
 
-  // 4. Assemble synthetic accepted output
+  // 4. Assemble synthetic accepted output (needed for freshness baseline)
   const acceptedOutput = assembleAcceptedOutput(plan, sectionOutputs);
 
-  // 5. Build JSONB sections and counters
-  const sectionsJsonb = buildSectionsJsonb(sectionOutputs, session.commitSha);
-  const currentCounters = buildCurrentCounters(sectionOutputs, acceptedOutput.total_korean_chars);
-
-  // 6. Resolve project from DB
-  const projectResult = await pool.query<{ id: number; external_id: string }>(
-    "SELECT id, external_id FROM projects WHERE LOWER(full_name) = LOWER($1)",
-    [session.repoFullName],
-  );
-
-  if (projectResult.rows.length === 0) {
-    throw new Error(
-      `Project not found in database for repo_ref: ${session.repoFullName}. ` +
-        `Ensure the project exists in the projects table with a matching full_name.`,
-    );
-  }
-
-  const { id: projectId, external_id: projectExternalId } = projectResult.rows[0];
-
-  // 7. In a single DB transaction: upsert snapshot + draft
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    const generatedAt = new Date().toISOString();
-    const sectionsJson = JSON.stringify(sectionsJsonb);
-    const countersJson = JSON.stringify(currentCounters);
-    const useLegacyColumns = await hasLegacySnapshotColumns(client);
-    const legacySectionsJson = JSON.stringify({ sections: sectionsJsonb });
-
-    if (useLegacyColumns) {
-      await client.query(
-        `INSERT INTO project_wiki_snapshots
-          (project_external_id, generated_at, sections, current_counters,
-           is_data_ready, hidden_sections, readiness_metadata,
-           what_section, how_section, architecture_section, releases_section, activity_section, chat_section,
-           created_at, updated_at)
-        VALUES ($1, $2, $3::jsonb, $4::jsonb, true, '[]'::jsonb, '{"passesTopStarGate": true}'::jsonb,
-                $5::jsonb, $5::jsonb, $5::jsonb, $5::jsonb, $5::jsonb, $5::jsonb, NOW(), NOW())
-        ON CONFLICT (project_external_id) DO UPDATE SET
-          generated_at = EXCLUDED.generated_at,
-          sections = EXCLUDED.sections,
-          current_counters = EXCLUDED.current_counters,
-          is_data_ready = true,
-          readiness_metadata = '{"passesTopStarGate": true}'::jsonb,
-          what_section = EXCLUDED.what_section,
-          how_section = EXCLUDED.how_section,
-          architecture_section = EXCLUDED.architecture_section,
-          releases_section = EXCLUDED.releases_section,
-          activity_section = EXCLUDED.activity_section,
-          chat_section = EXCLUDED.chat_section,
-          updated_at = NOW()`,
-        [
-          projectExternalId,
-          generatedAt,
-          sectionsJson,
-          countersJson,
-          legacySectionsJson,
-        ],
-      );
-    } else {
-      await client.query(
-        `INSERT INTO project_wiki_snapshots
-          (project_external_id, generated_at, sections, current_counters,
-           is_data_ready, hidden_sections, readiness_metadata, created_at, updated_at)
-        VALUES ($1, $2, $3::jsonb, $4::jsonb, true, '[]'::jsonb,
-                '{"passesTopStarGate": true}'::jsonb, NOW(), NOW())
-        ON CONFLICT (project_external_id) DO UPDATE SET
-          generated_at = EXCLUDED.generated_at,
-          sections = EXCLUDED.sections,
-          current_counters = EXCLUDED.current_counters,
-          is_data_ready = true,
-          readiness_metadata = '{"passesTopStarGate": true}'::jsonb,
-          updated_at = NOW()`,
-        [projectExternalId, generatedAt, sectionsJson, countersJson],
-      );
-    }
-
-    // Upsert wiki_drafts
-    const existingDraft = await client.query<{ id: number }>(
-      "SELECT id FROM wiki_drafts WHERE project_id = $1 ORDER BY updated_at DESC LIMIT 1",
-      [projectId],
-    );
-
-    if (existingDraft.rows.length > 0) {
-      await client.query(
-        `UPDATE wiki_drafts
-        SET sections = $1::jsonb, current_counters = $2::jsonb, updated_at = NOW()
-        WHERE id = $3`,
-        [
-          JSON.stringify(sectionsJsonb),
-          JSON.stringify(currentCounters),
-          existingDraft.rows[0].id,
-        ],
-      );
-    } else {
-      await client.query(
-        `INSERT INTO wiki_drafts
-          (project_id, sections, current_counters, hidden_sections, created_at, updated_at)
-        VALUES ($1, $2::jsonb, $3::jsonb, '[]'::jsonb, NOW(), NOW())`,
-        [projectId, JSON.stringify(sectionsJsonb), JSON.stringify(currentCounters)],
-      );
-    }
-
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-
-  // 8. Advance freshness baseline if flagged
+  // 5. Advance freshness baseline if flagged
   if (advanceBaseline) {
     try {
       const evidence = extractSectionEvidenceFromAcceptedOutput(acceptedOutput);
@@ -400,7 +211,7 @@ export async function finalize(
     } catch (err) {
       process.stderr.write(
         `  ⚠ freshness baseline not saved: ${String(err)}\n` +
-          `    DB writes succeeded; re-run finalize --advance_baseline after fixing source paths\n`,
+          `    Re-run finalize --advance_baseline after fixing source paths\n`,
       );
     }
   }

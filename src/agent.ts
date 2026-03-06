@@ -38,7 +38,6 @@ import { mapChangedPathsToImpactedSections } from "./freshness/impact-map";
 import { extractSectionEvidenceFromAcceptedOutput } from "./freshness/section-evidence";
 import { loadFreshnessState, saveFreshnessState } from "./freshness/state";
 import { createPool, loadDbConfig, ensurePgVector, ensureHnswIndex } from "./persistence/db";
-import { persistWikiToDb } from "./persistence/persist-wiki";
 import { planContext } from "./chunked/plan-sections";
 import { validatePlan } from "./chunked/validate-plan";
 import { SectionOutputSchema, SectionPlanOutputSchema, PlanContextSchema } from "./contracts/chunked-generation";
@@ -296,90 +295,6 @@ async function packageCommand(flags: Record<string, string>): Promise<void> {
   }
 }
 
-// ── persist ──────────────────────────────────────────────────────────────────
-
-async function persistCommand(flags: Record<string, string>): Promise<void> {
-  const inputFile = flags["input"];
-  const advanceBaseline = flags["advance_baseline"] === "true";
-  const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
-  const qualityGateLevel = resolveQualityGateLevel(flags, getQualityGateLevel(process.env));
-
-  let raw: string;
-  if (inputFile) {
-    raw = await readFile(path.resolve(inputFile), "utf8");
-  } else {
-    raw = await readStdin();
-  }
-
-  const acceptedOutput = JSON.parse(raw) as GroundedAcceptedOutput;
-
-  process.stderr.write(
-    `[devport-agent] persist: ${acceptedOutput.repo_ref}@${acceptedOutput.commit_sha.slice(0, 7)}\n`,
-  );
-
-  const packaged = packageAcceptedOutputsForDelivery([acceptedOutput], { qualityGateLevel });
-  const envelope = packaged.artifacts[0];
-
-  process.stderr.write(`  ✓ validation passed (${envelope.sections.length} sections)\n`);
-
-  const pool = createPool(loadDbConfig());
-
-  try {
-    await ensurePgVector(pool);
-    await ensureHnswIndex(pool);
-    process.stderr.write(`  ✓ pgvector extension + HNSW index ready\n`);
-
-    const apiKey = process.env["OPENAI_API_KEY"];
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY environment variable is required for persist command");
-    }
-
-    const { default: OpenAI } = await import("openai");
-    const openai = new OpenAI({ apiKey });
-
-    const result = await persistWikiToDb(acceptedOutput, envelope, {
-      pool,
-      openai,
-      advanceBaseline,
-      statePath,
-    });
-
-    process.stderr.write(
-      `  ✓ persisted: ${result.chunksInserted} chunks embedded for project ${result.projectExternalId}\n`,
-    );
-
-    if (advanceBaseline) {
-      try {
-        const evidence = extractSectionEvidenceFromAcceptedOutput(acceptedOutput);
-        const state = await loadFreshnessState(statePath);
-        const repoRef = envelope.project.repoRef.toLowerCase();
-
-        const nextState = {
-          ...state,
-          repos: {
-            ...state.repos,
-            [repoRef]: {
-              repo_ref: repoRef,
-              last_delivery_commit: envelope.project.commitSha,
-              sectionEvidenceIndex: evidence,
-            },
-          },
-        };
-
-        await saveFreshnessState(statePath, nextState);
-        process.stderr.write(`  ✓ freshness baseline → ${envelope.project.commitSha.slice(0, 7)}\n`);
-      } catch (err) {
-        process.stderr.write(
-          `  ⚠ freshness baseline not saved: ${String(err)}\n` +
-          `    DB writes succeeded; re-run persist --advance_baseline after fixing citations\n`,
-        );
-      }
-    }
-  } finally {
-    await pool.end();
-  }
-}
-
 // ── plan-sections ────────────────────────────────────────────────────────────
 
 async function planSectionsCommand(flags: Record<string, string>): Promise<void> {
@@ -578,6 +493,7 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
   const sessionFile = flags["session"];
   const advanceBaseline = flags["advance_baseline"] === "true";
   const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
+  const deleteSnapshot = flags["delete_snapshot"] === "true";
 
   const planRaw = await readFile(path.resolve(planFile), "utf8");
   const plan = SectionPlanOutputSchema.parse(JSON.parse(planRaw));
@@ -600,6 +516,7 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
   const result = await finalize(session, plan, {
     advanceBaseline,
     statePath,
+    deleteSnapshot,
   });
 
   process.stderr.write(
@@ -653,13 +570,6 @@ function printHelp(): void {
       "           --advance_baseline            save freshness state for future detect",
       "           --state_path                  (default: devport-output/freshness/state.json)",
       "",
-      "  persist  Validate, embed, and write wiki directly to PostgreSQL + pgvector",
-      "           --input accepted-output.json  (optional, reads stdin if omitted)",
-      "           --quality_gate_level          standard|strict (default from DEVPORT_QUALITY_GATE_LEVEL)",
-      "           --advance_baseline            save freshness state for future detect",
-      "           --state_path                  (default: devport-output/freshness/state.json)",
-      "           Requires: OPENAI_API_KEY, DEVPORT_DB_* env vars",
-      "",
       "  plan-sections  Analyze repo and produce planning context for AI section generation",
       "                 --artifact artifact.json  (required)",
       "                 --out plan-context.json   (optional, prints to stdout if omitted)",
@@ -682,13 +592,13 @@ function printHelp(): void {
       "            --session session.json     (optional, auto-derived from repo name)",
       "            --advance_baseline         save freshness state for future detect",
       "            --state_path               (default: devport-output/freshness/state.json)",
+      "            --delete_snapshot          delete snapshot directory after successful finalize",
       "            Requires: OPENAI_API_KEY, DEVPORT_DB_* env vars",
       "",
       "First-run workflow (monolithic):",
       "  1. npx tsx src/agent.ts ingest --repo owner/repo --out artifact.json",
       "  2. AI reads artifact.json + files under snapshot_path, generates GroundedAcceptedOutput",
       "  3. npx tsx src/agent.ts package --input accepted-output.json --advance_baseline",
-      "     (or: npx tsx src/agent.ts persist --input accepted-output.json --advance_baseline)",
       "",
       "Chunked workflow (higher quality, section-at-a-time):",
       "  1. npx tsx src/agent.ts ingest --repo owner/repo --out artifact.json",
@@ -705,7 +615,6 @@ function printHelp(): void {
       "  2. npx tsx src/agent.ts ingest --repo owner/repo --out artifact.json",
       "  3. AI regenerates (all or only impacted sections) → accepted-output.json",
       "  4. npx tsx src/agent.ts package --input accepted-output.json --advance_baseline",
-      "     (or: npx tsx src/agent.ts persist --input accepted-output.json --advance_baseline)",
       "",
     ].join("\n"),
   );
@@ -730,8 +639,7 @@ async function main(): Promise<void> {
   if (command === "ingest") { await ingestCommand(flags); return; }
   if (command === "detect") { await detectCommand(flags); return; }
   if (command === "package") { await packageCommand(flags); return; }
-  if (command === "persist") { await persistCommand(flags); return; }
-  if (command === "plan-sections") { await planSectionsCommand(flags); return; }
+if (command === "plan-sections") { await planSectionsCommand(flags); return; }
   if (command === "validate-plan") { await validatePlanCommand(flags); return; }
   if (command === "persist-section") { await persistSectionCommand(flags); return; }
   if (command === "finalize") { await finalizeCommand(flags); return; }

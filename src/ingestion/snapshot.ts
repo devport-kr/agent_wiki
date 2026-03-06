@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { existsSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
@@ -186,10 +187,9 @@ async function runGitCommand(args: string[], cwd: string): Promise<void> {
 }
 
 export const defaultGitShell: GitShell = {
-  async materialize({ repoFullName, commitSha, snapshotPath }) {
+  async materialize({ repoFullName, snapshotPath }) {
     const repoUrl = `https://github.com/${repoFullName}.git`;
-    await runGitCommand(["clone", "--quiet", repoUrl, snapshotPath], process.cwd());
-    await runGitCommand(["checkout", "--quiet", "--detach", commitSha], snapshotPath);
+    await runGitCommand(["clone", "--depth", "1", "--quiet", repoUrl, snapshotPath], process.cwd());
   },
 };
 
@@ -245,6 +245,21 @@ async function buildManifest(
   };
 }
 
+async function pruneOldSnapshots(repoDir: string, keepId: string): Promise<void> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(repoDir, { withFileTypes: true });
+  } catch {
+    return; // dir doesn't exist yet
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name !== keepId) {
+      await fs.rm(path.join(repoDir, entry.name), { recursive: true, force: true });
+      process.stderr.write(`  [snapshot] pruned old snapshot: ${entry.name}\n`);
+    }
+  }
+}
+
 export class RepoSnapshotManager {
   private readonly now: () => string;
   private readonly forceRebuild: boolean;
@@ -268,7 +283,9 @@ export class RepoSnapshotManager {
       repo: request.repo,
       commitSha: request.commitSha,
     });
-    const snapshotPath = path.join(this.rootPath, request.owner, request.repo, snapshotId);
+    const repoDir = path.join(this.rootPath, request.owner, request.repo);
+    await pruneOldSnapshots(repoDir, snapshotId);
+    const snapshotPath = path.join(repoDir, snapshotId);
     const manifestPath = path.join(snapshotPath, MANIFEST_FILE_NAME);
 
     const existing = existsSync(snapshotPath) ? await readManifest(snapshotPath) : null;

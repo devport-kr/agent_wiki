@@ -80,7 +80,7 @@ function collectSectionChunks(
  * Persists a single section to the database.
  * Scoped delete: only removes chunks for this specific section.
  * Idempotent — re-running for the same section replaces its chunks.
- * Does NOT touch project_wiki_snapshots or wiki_drafts (that's finalize's job).
+ * Does NOT touch any other tables.
  */
 export async function persistSectionToDb(
   sectionOutput: SectionOutput,

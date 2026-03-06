@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -17,6 +17,7 @@ import { loadFreshnessState, saveFreshnessState } from "../freshness/state";
 export interface FinalizeOptions {
   advanceBaseline: boolean;
   statePath: string;
+  deleteSnapshot?: boolean;
 }
 
 export interface FinalizeResult {
@@ -216,11 +217,22 @@ export async function finalize(
 
   const totalSubsections = sectionOutputs.reduce((sum, section) => sum + section.subsections.length, 0);
 
-  return {
+  const result: FinalizeResult = {
     sectionsAssembled: sectionOutputs.length,
     totalSubsections,
     totalSourceDocs: acceptedOutput.source_doc_count,
     totalTrendFacts: acceptedOutput.trend_fact_count,
     totalKoreanChars: acceptedOutput.total_korean_chars,
   };
+
+  if (options.deleteSnapshot) {
+    try {
+      await rm(plan.snapshotPath, { recursive: true, force: true });
+      process.stderr.write(`  ✓ snapshot deleted → ${plan.snapshotPath}\n`);
+    } catch (err) {
+      process.stderr.write(`  ⚠ snapshot delete failed: ${String(err)}\n`);
+    }
+  }
+
+  return result;
 }

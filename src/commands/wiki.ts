@@ -18,7 +18,7 @@ export function repoSlug(ownerRepo: string): string {
 
 export function workspacePath(ownerRepo: string, suffix: string): string {
   const slug = repoSlug(ownerRepo);
-  return `devport-output/workspace/${slug}-${suffix}`;
+  return `portki-output/workspace/${slug}-${suffix}`;
 }
 
 export async function wikiCommand(
@@ -31,7 +31,7 @@ export async function wikiCommand(
   }
   const repo = `${parts[0]}/${parts[1]}`;
   const slug = repoSlug(repo);
-  const snapshotRoot = flags["snapshot_root"] ?? "devport-output/snapshots";
+  const snapshotRoot = flags["snapshot_root"] ?? "portki-output/snapshots";
 
   // 1. Ingest
   process.stderr.write(`[portki] ${repo} — ingesting...\n`);

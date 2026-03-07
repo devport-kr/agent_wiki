@@ -30,7 +30,7 @@ export const ingestRunInputSchema = z
   .object({
     repo_ref: repoRefInputSchema,
     force_rebuild: z.boolean().default(false),
-    snapshot_root: z.string().trim().min(1).default("devport-output/snapshots"),
+    snapshot_root: z.string().trim().min(1).default("portki-output/snapshots"),
     now: z
       .function()
       .args()

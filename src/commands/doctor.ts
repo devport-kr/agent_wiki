@@ -22,8 +22,8 @@ export async function doctorCommand(): Promise<void> {
   );
   if (!nodeOk) allOk = false;
 
-  // devport-output/ writable
-  const outputDir = path.resolve("devport-output");
+  // portki-output/ writable
+  const outputDir = path.resolve("portki-output");
   let writable = false;
   if (existsSync(outputDir)) {
     try {
@@ -37,12 +37,12 @@ export async function doctorCommand(): Promise<void> {
     writable = true;
   }
   process.stderr.write(
-    `  ${writable ? "ok" : "FAIL"} devport-output/ ${existsSync(outputDir) ? "writable" : "will be created on first run"}\n`,
+    `  ${writable ? "ok" : "FAIL"} portki-output/ ${existsSync(outputDir) ? "writable" : "will be created on first run"}\n`,
   );
   if (!writable) allOk = false;
 
   // Active sessions
-  const chunkedDir = path.resolve("devport-output/chunked");
+  const chunkedDir = path.resolve("portki-output/chunked");
   let sessionCount = 0;
   if (existsSync(chunkedDir)) {
     try {

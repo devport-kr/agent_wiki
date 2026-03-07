@@ -54,7 +54,7 @@ export async function statusCommand(argv: string[]): Promise<void> {
   }
 
   // Check finalized output
-  const wikiReadme = `devport-output/wiki/${repo}/README.md`;
+  const wikiReadme = `portki-output/wiki/${repo}/README.md`;
   const finalized = existsSync(path.resolve(wikiReadme));
   const fIcon = finalized ? "+" : "-";
   process.stderr.write(`  [${fIcon}] finalized (wiki output)\n`);

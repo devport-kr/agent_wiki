@@ -156,7 +156,7 @@ export async function writeMarkdownBundle(
   acceptedOutput: GroundedAcceptedOutput,
   options: WriteMarkdownBundleOptions = {},
 ): Promise<MarkdownBundleResult> {
-  const outputDir = buildOutputDir(options.outDir ?? "devport-output/wiki", acceptedOutput.repo_ref);
+  const outputDir = buildOutputDir(options.outDir ?? "portki-output/wiki", acceptedOutput.repo_ref);
   await mkdir(outputDir, { recursive: true });
 
   const files: MarkdownBundleFile[] = [];

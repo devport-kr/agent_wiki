@@ -269,7 +269,7 @@ export class RepoSnapshotManager {
   constructor(private readonly config: RepoSnapshotManagerConfig) {
     this.now = config.now || (() => new Date().toISOString());
     this.forceRebuild = Boolean(config.forceRebuild);
-    this.rootPath = path.resolve(config.snapshotRoot || "devport-output/snapshots");
+    this.rootPath = path.resolve(config.snapshotRoot || "portki-output/snapshots");
     this.gitShell =
       config.gitShell ||
       (config.sourcePath

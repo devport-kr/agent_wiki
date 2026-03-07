@@ -117,7 +117,7 @@ function resolveQualityGateLevel(
 
 async function ingestCommand(flags: Record<string, string>): Promise<void> {
   const { repo, ref } = parseRepo(requireFlag(flags, "repo"), flags["ref"]);
-  const snapshotRoot = flags["snapshot_root"] ?? "devport-output/snapshots";
+  const snapshotRoot = flags["snapshot_root"] ?? "portki-output/snapshots";
   const outFile = flags["out"];
 
   process.stderr.write(`[devport-agent] ingest: ${repo}${ref ? `@${ref}` : ""}\n`);
@@ -155,7 +155,7 @@ async function detectCommand(flags: Record<string, string>): Promise<void> {
     throw new Error(`--repo must be owner/repo, got: ${repoFlag}`);
   }
   const repoRef = `${parts[0]}/${parts[1]}`;
-  const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
+  const statePath = flags["state_path"] ?? "portki-output/freshness/state.json";
 
   process.stderr.write(`[devport-agent] detect: ${repoRef}\n`);
 
@@ -233,10 +233,10 @@ async function detectCommand(flags: Record<string, string>): Promise<void> {
 // ── package ──────────────────────────────────────────────────────────────────
 
 async function packageCommand(flags: Record<string, string>): Promise<void> {
-  const outDir = flags["out_dir"] ?? "devport-output/wiki";
+  const outDir = flags["out_dir"] ?? "portki-output/wiki";
   const inputFile = flags["input"];
   const advanceBaseline = flags["advance_baseline"] === "true";
-  const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
+  const statePath = flags["state_path"] ?? "portki-output/freshness/state.json";
   const qualityGateLevel = resolveQualityGateLevel(flags, getQualityGateLevel(process.env));
 
   let raw: string;
@@ -453,9 +453,9 @@ async function finalizeCommand(flags: Record<string, string>): Promise<void> {
   const planFile = requireFlag(flags, "plan");
   const sessionFile = flags["session"];
   const advanceBaseline = flags["advance_baseline"] === "true";
-  const statePath = flags["state_path"] ?? "devport-output/freshness/state.json";
+  const statePath = flags["state_path"] ?? "portki-output/freshness/state.json";
   const deleteSnapshot = flags["delete_snapshot"] === "true";
-  const outDir = flags["out_dir"] ?? "devport-output/wiki";
+  const outDir = flags["out_dir"] ?? "portki-output/wiki";
 
   const planRaw = await readFile(path.resolve(planFile), "utf8");
   const plan = SectionPlanOutputSchema.parse(JSON.parse(planRaw));
@@ -528,16 +528,16 @@ function printHelp(): void {
       "                   --repo owner/repo     (required)",
       "                   --ref  branch|sha     (optional, uses default branch if omitted)",
       "                   --out  artifact.json  (optional, prints to stdout if omitted)",
-      "                   --snapshot_root       (default: devport-output/snapshots)",
+      "                   --snapshot_root       (default: portki-output/snapshots)",
       "                   --force_rebuild       (re-download even if cache is valid)",
       "",
       "  detect           Detect what changed since the last delivery",
       "                   --repo owner/repo     (required)",
-      "                   --state_path          (default: devport-output/freshness/state.json)",
+      "                   --state_path          (default: portki-output/freshness/state.json)",
       "",
       "  package          Validate AI-generated output, write markdown wiki files",
       "                   --input accepted-output.json  (optional, reads stdin if omitted)",
-      "                   --out_dir                     (default: devport-output/wiki)",
+      "                   --out_dir                     (default: portki-output/wiki)",
       "                   --quality_gate_level          standard|strict",
       "                   --advance_baseline            save freshness state for future detect",
       "",

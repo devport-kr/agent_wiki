@@ -35,7 +35,7 @@ export function renderHandoff(opts: HandoffOptions): string {
 
   const persistedSet = new Set(persistedSections ?? []);
 
-  const sectionPlanPath = `devport-output/workspace/${slug}-section-plan.json`;
+  const sectionPlanPath = `portki-output/workspace/${slug}-section-plan.json`;
   const profileLines = [
     `- **Repo**: ${ownerRepo}`,
     `- **Commit**: ${artifact.commit_sha.slice(0, 7)}`,
@@ -136,7 +136,7 @@ export function renderHandoff(opts: HandoffOptions): string {
     "3. Persist it:",
     "",
     "```bash",
-    `portki persist-section --plan ${sectionPlanPath} --section sec-N --input devport-output/workspace/${slug}-section-N-output.json`,
+    `portki persist-section --plan ${sectionPlanPath} --section sec-N --input portki-output/workspace/${slug}-section-N-output.json`,
     "```",
     "",
   ];
@@ -157,7 +157,7 @@ export function renderHandoff(opts: HandoffOptions): string {
     `portki finalize --plan ${sectionPlanPath} --advance_baseline`,
     "```",
     "",
-    `Output will be written to \`devport-output/wiki/${ownerRepo}/\`.`,
+    `Output will be written to \`portki-output/wiki/${ownerRepo}/\`.`,
     "",
     "## Writing Rules",
     "",

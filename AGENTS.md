@@ -11,7 +11,7 @@ Do not call external LLM APIs. Do not add OpenAI or Anthropic API usage.
 - This branch is the public version.
 - There is no DB, no embeddings, no PostgreSQL, and no OpenAI API dependency.
 - It should work without `.env` setup.
-- Final output lives under `devport-output/wiki/{owner}/{repo}/` as Markdown files.
+- Final output lives under `portki-output/wiki/{owner}/{repo}/` as Markdown files.
 - `persist-section` means local validation plus session registration only.
 - `finalize` assembles the full Markdown wiki bundle.
 - `package` is the monolithic path that exports Markdown directly from a full accepted output.
@@ -56,20 +56,20 @@ Monolithic alternative for small repos:
 
 ## Workspace Naming Rule
 
-If multiple repos are processed in parallel, all agent-authored intermediate files must be stored in `devport-output/workspace/` and prefixed with the repo slug.
+If multiple repos are processed in parallel, all agent-authored intermediate files must be stored in `portki-output/workspace/` and prefixed with the repo slug.
 
 Examples:
 
-- `devport-output/workspace/ollama-artifact.json`
-- `devport-output/workspace/ollama-section-plan.json`
-- `devport-output/workspace/ollama-section-1-output.json`
+- `portki-output/workspace/ollama-artifact.json`
+- `portki-output/workspace/ollama-section-plan.json`
+- `portki-output/workspace/ollama-section-1-output.json`
 
 ## Commands
 
 ### `ingest`
 
 ```bash
-npx tsx src/agent.ts ingest --repo owner/repo --out devport-output/workspace/{repo-slug}-artifact.json
+npx tsx src/agent.ts ingest --repo owner/repo --out portki-output/workspace/{repo-slug}-artifact.json
 ```
 
 The agent must read these fields:
@@ -97,7 +97,7 @@ Interpret the status as:
 ### `plan-sections`
 
 ```bash
-npx tsx src/agent.ts plan-sections --artifact devport-output/workspace/{repo-slug}-artifact.json --out devport-output/workspace/{repo-slug}-plan-context.json
+npx tsx src/agent.ts plan-sections --artifact portki-output/workspace/{repo-slug}-artifact.json --out portki-output/workspace/{repo-slug}-plan-context.json
 ```
 
 The output includes:
@@ -111,13 +111,13 @@ The output includes:
 ### `validate-plan`
 
 ```bash
-npx tsx src/agent.ts validate-plan --input devport-output/workspace/{repo-slug}-section-plan.json --context devport-output/workspace/{repo-slug}-plan-context.json --out devport-output/workspace/{repo-slug}-section-plan.json
+npx tsx src/agent.ts validate-plan --input portki-output/workspace/{repo-slug}-section-plan.json --context portki-output/workspace/{repo-slug}-plan-context.json --out portki-output/workspace/{repo-slug}-section-plan.json
 ```
 
 ### `persist-section`
 
 ```bash
-npx tsx src/agent.ts persist-section --plan devport-output/workspace/{repo-slug}-section-plan.json --section sec-1 --input devport-output/workspace/{repo-slug}-section-1-output.json
+npx tsx src/agent.ts persist-section --plan portki-output/workspace/{repo-slug}-section-plan.json --section sec-1 --input portki-output/workspace/{repo-slug}-section-1-output.json
 ```
 
 This command only does the following:
@@ -131,21 +131,21 @@ It does not write to a database, generate embeddings, or call external APIs.
 ### `finalize`
 
 ```bash
-npx tsx src/agent.ts finalize --plan devport-output/workspace/{repo-slug}-section-plan.json --advance_baseline
+npx tsx src/agent.ts finalize --plan portki-output/workspace/{repo-slug}-section-plan.json --advance_baseline
 ```
 
 This command:
 
 - validates cross-section repetition
 - assembles persisted sections from the local session
-- writes `devport-output/wiki/{owner}/{repo}/README.md`
-- writes section Markdown files such as `devport-output/wiki/{owner}/{repo}/01-sec-1.md`
+- writes `portki-output/wiki/{owner}/{repo}/README.md`
+- writes section Markdown files such as `portki-output/wiki/{owner}/{repo}/01-sec-1.md`
 - optionally advances the freshness baseline
 
 ### `package`
 
 ```bash
-npx tsx src/agent.ts package --input devport-output/workspace/{repo-slug}-accepted-output.json --advance_baseline
+npx tsx src/agent.ts package --input portki-output/workspace/{repo-slug}-accepted-output.json --advance_baseline
 ```
 
 This validates a monolithic accepted output and writes the same Markdown wiki bundle.
@@ -196,7 +196,7 @@ The final result is Markdown, not a delivery JSON artifact.
 ## Output Paths
 
 ```text
-devport-output/
+portki-output/
   workspace/
   snapshots/{owner}/{repo}/
   chunked/{owner}/{repo}/session.json

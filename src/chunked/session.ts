@@ -9,7 +9,7 @@ import {
   type SectionPlanOutput,
 } from "../contracts/chunked-generation";
 
-export function sessionPathForRepo(repoFullName: string, rootDir = "devport-output/chunked"): string {
+export function sessionPathForRepo(repoFullName: string, rootDir = "portki-output/chunked"): string {
   const [owner, repo] = repoFullName.split("/");
   if (!owner || !repo) {
     throw new Error(`Invalid repoFullName: ${repoFullName}`);

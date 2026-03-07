@@ -1,6 +1,6 @@
 {
   "name": "@devport-kr/portki",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Public markdown-only CLI for generating Korean repository wikis from GitHub codebases",
   "type": "module",
   "private": false,

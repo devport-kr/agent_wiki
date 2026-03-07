@@ -4,6 +4,8 @@ import type OpenAI from "openai";
 import type { SectionOutput } from "../contracts/chunked-generation";
 import { embedTexts, vectorToSql } from "../persistence/embed";
 
+export type ChunkType = "summary" | "body" | "overview";
+
 export interface PersistSectionOptions {
   pool: pg.Pool;
   openai: OpenAI;
@@ -21,7 +23,7 @@ interface ChunkEntry {
     projectExternalId: string;
     sectionId: string;
     subsectionId: string | null;
-    chunkType: "summary" | "body";
+    chunkType: ChunkType;
     content: string;
     metadata: Record<string, unknown>;
     commitSha: string;
@@ -135,6 +137,47 @@ export async function persistSectionToDb(
     await client.query("COMMIT");
 
     return { chunksInserted: chunkEntries.length };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Persists the plan-level overviewKo as a standalone 'overview' chunk.
+ * Scoped delete: removes any existing rows with section_id = 'overview'.
+ * Called automatically after sec-1 is persisted.
+ */
+export async function persistOverviewToDb(
+  overviewKo: string,
+  options: PersistSectionOptions,
+): Promise<void> {
+  const { pool, openai, projectExternalId, commitSha } = options;
+
+  process.stderr.write(`  embedding overview chunk...\n`);
+  const [emb] = await embedTexts(openai, [overviewKo]);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      "DELETE FROM wiki_section_chunks WHERE project_external_id = $1 AND section_id = 'overview'",
+      [projectExternalId],
+    );
+
+    await client.query(
+      `INSERT INTO wiki_section_chunks
+        (project_external_id, section_id, subsection_id, chunk_type, content,
+         embedding, token_count, metadata, commit_sha, created_at, updated_at)
+      VALUES ($1, 'overview', 'overview', 'overview', $2, $3::vector, $4, '{}'::jsonb, $5, NOW(), NOW())`,
+      [projectExternalId, overviewKo, vectorToSql(emb.embedding), emb.tokenCount, commitSha],
+    );
+
+    await client.query("COMMIT");
+    process.stderr.write(`  ✓ overview chunk persisted\n`);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

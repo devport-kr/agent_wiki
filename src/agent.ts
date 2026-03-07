@@ -11,7 +11,7 @@
  *   package          Validate AI-generated output, write delivery.json
  *   plan-sections    Analyze repo and produce section plan with focus paths
  *   persist-section  Validate and persist a single section to PostgreSQL
- *   finalize         Cross-validate all sections, update snapshot/draft tables
+ *   finalize         Cross-validate all sections, advance freshness baseline
  *
  * Typical first-run workflow:
  *   1. npx tsx src/agent.ts ingest --repo owner/repo --out artifact.json
@@ -42,7 +42,7 @@ import { planContext } from "./chunked/plan-sections";
 import { validatePlan } from "./chunked/validate-plan";
 import { SectionOutputSchema, SectionPlanOutputSchema, PlanContextSchema } from "./contracts/chunked-generation";
 import { validateSection } from "./chunked/validate-section";
-import { persistSectionToDb } from "./chunked/persist-section";
+import { persistSectionToDb, persistOverviewToDb } from "./chunked/persist-section";
 import { loadSession, initSession, saveSession, markSectionPersisted, sessionPathForRepo } from "./chunked/session";
 import { finalize } from "./chunked/finalize";
 import { ingestRunArtifactSchema } from "./ingestion/types";
@@ -455,6 +455,15 @@ async function persistSectionCommand(flags: Record<string, string>): Promise<voi
       projectExternalId,
       commitSha: plan.commitSha,
     });
+
+    if (sectionId === "sec-1") {
+      await persistOverviewToDb(plan.overviewKo, {
+        pool,
+        openai,
+        projectExternalId,
+        commitSha: plan.commitSha,
+      });
+    }
 
     let koreanChars = sectionOutput.summaryKo.length;
     for (const sub of sectionOutput.subsections) {

@@ -242,6 +242,8 @@ Requires: `OPENAI_API_KEY`, `DEVPORT_DB_*` env vars.
 
 The command is idempotent — re-running for the same section replaces its chunks. Progress is tracked in a session file at `devport-output/chunked/{owner}/{repo}/session.json`.
 
+**Special behavior for `sec-1`:** when persisting sec-1, the command also embeds and persists the plan-level `overviewKo` as a standalone `chunk_type = 'overview'` row (`section_id = 'overview'`, `subsection_id = 'overview'`). This happens automatically — no extra step needed. Re-running sec-1 also refreshes the overview chunk (scoped delete + re-insert).
+
 ---
 
 ### 6. `finalize` — cross-validate all sections and update snapshot
@@ -251,15 +253,16 @@ npx tsx src/agent.ts finalize --plan devport-output/workspace/{repo-slug}-sectio
 # Example: npx tsx src/agent.ts finalize --plan devport-output/workspace/ollama-section-plan.json --advance_baseline
 ```
 
-Runs after all sections are persisted. Validates the complete wiki across all sections (cross-section repetition, global ID uniqueness) and updates `project_wiki_snapshots` and `wiki_drafts` tables.
+Runs after all sections are persisted. Validates the complete wiki across all sections (cross-section repetition, global ID uniqueness) and optionally advances the freshness baseline. Does not write to the database — all DB writes happen in `persist-section`.
 
 Flags:
 - `--plan` (required) — path to the section plan
 - `--session` (optional) — path to session state file. Auto-derived if omitted.
 - `--advance_baseline` (optional but recommended) — saves freshness state for future `detect` runs
 - `--state_path` (optional) — where to write freshness baseline. Default: `devport-output/freshness/state.json`
+- `--delete_snapshot` (optional) — deletes the local snapshot directory after finalizing to reclaim disk space
 
-Requires: `OPENAI_API_KEY`, `DEVPORT_DB_*` env vars.
+No external service dependencies — no OpenAI, no DB connection required.
 
 ---
 
@@ -297,21 +300,21 @@ Read the PlanContext, the README, and key source files. Based on what the projec
   "ingestRunId": "<from plan-context.json>",
   "snapshotPath": "<from plan-context.json>",
   "generatedAt": "<ISO 8601 timestamp>",
-  "overviewKo": "<이 저장소의 한국어 개요 — 합니다체로 작성합니다. 예: 이 프로젝트는 X를 제공하는 오픈소스 도구입니다.>",
+  "overviewKo": "<이 프로젝트가 무엇이고 어떤 문제를 해결하는지, 핵심 목표와 기능은 무엇인지, 설치·실행 방법은 어떤지를 README 수준으로 요약합니다. 이후 위키 전체가 어떤 순서로 프로젝트를 설명하는지 안내합니다. 특정 코드 파일·함수·호출 흐름을 분석하지 않습니다. 합니다체, 최소 3,000자. 위키 전체의 academic abstract 역할 — 이 필드만 읽어도 프로젝트가 무엇인지 이해할 수 있어야 합니다.>",
   "totalSections": 5,
   "sections": [
     {
       "sectionId": "sec-1",
       "titleKo": "<이 프로젝트의 고유한 정체성을 반영하는 한국어 제목>",
       "summaryKo": "<이 섹션이 다루는 내용과 이유를 합니다체로 요약합니다>",
-      "focusPaths": ["README.md", "src/main.ts", "src/config.ts"],
+      "focusPaths": ["src/main.ts", "src/config.ts"],
       "subsectionCount": 3,
       "subsections": [
         {
           "subsectionId": "sub-1-1",
-          "titleKo": "프로젝트 소개와 개요",
-          "objectiveKo": "이 프로젝트가 무엇이고 어떤 문제를 해결하는지, 핵심 목표와 기능은 무엇인지, 설치·실행 방법은 어떤지를 README 수준으로 요약합니다. 이후 위키 전체가 어떤 순서로 프로젝트를 설명하는지 안내합니다.",
-          "targetEvidenceKinds": ["docs"],
+          "titleKo": "<sec-1의 첫 번째 기술 주제를 반영하는 제목>",
+          "objectiveKo": "<이 서브섹션이 분석하는 코드 영역을 합니다체로 기술합니다 — 진입점, 디렉토리 구조, 핵심 모듈 경계 등>",
+          "targetEvidenceKinds": ["code"],
           "targetCharacterCount": 3000
         }
       ]
@@ -324,21 +327,20 @@ Read the PlanContext, the README, and key source files. Based on what the projec
 ```
 
 **How to design good sections:**
-- Read the README first — understand what the project does from the user's perspective
-- **MANDATORY — `sub-1-1` is the project entry point.** This subsection is a special override:
-  - Its `titleKo` must be "프로젝트 소개와 개요" (or a project-specific variant like "Dify 플랫폼 소개와 개요")
-  - It must **NOT** analyze specific code files, function names, or call flows
-  - It must read like a README/TL;DR: explain what the project is, what problem it solves, its goals, key capabilities
-  - It must include how to get started (install, download, run)
-  - It must end with a short map of what the remaining wiki sections cover
-  - Think of it as an **academic abstract** for the entire wiki — a reader who only reads `sub-1-1` should understand what the project is and why it matters
-  - `targetEvidenceKinds` for `sub-1-1` should be `["docs"]`, not `["code"]`
-  - `sub-1-2` and `sub-1-3` then dive into the technical code-level analysis (entry points, architecture, Mermaid diagrams)
+- Read the README first to write `overviewKo` — but **do not include README.md in any section's `focusPaths`**. README content belongs in `overviewKo`, not in section analysis.
+- **`sub-1-1` is a normal body subsection.** Write it like any other subsection: real code analysis, specific file paths, function names, call flows. The project overview lives in `overviewKo` at the plan level (persisted separately as a standalone chunk by `persist-section sec-1`) — do not duplicate it in `sub-1-1`.
 - Sections should reflect the project's **identity**, not a generic template
   - For an AI agent framework: "에이전트 도구 시스템과 실행 계약", "프롬프트 체이닝과 LLM 통합"
   - For a database: "데이터 구조와 인메모리 엔진", "명령 파싱과 처리 파이프라인"
   - For a web framework: "라우팅 시스템과 미들웨어 체인", "템플릿 렌더링과 정적 자산"
-- Each section's `focusPaths` must be real files that exist in the snapshot
+- Each section's `focusPaths` must be real files that exist in the snapshot. Use the language and structure of the actual repo — do not default to TypeScript/JavaScript patterns. Examples by stack:
+  - Python: `src/core/engine.py`, `app/api/routes.py`, `pyproject.toml`
+  - Go: `cmd/server/main.go`, `internal/handler/handler.go`, `go.mod`
+  - Rust: `src/main.rs`, `src/lib.rs`, `Cargo.toml`
+  - Java/Kotlin: `src/main/java/com/example/App.java`, `build.gradle`
+  - C/C++: `src/main.c`, `include/core.h`, `CMakeLists.txt`
+  - Ruby: `lib/app.rb`, `config/routes.rb`, `Gemfile`
+  - TypeScript/JS: `src/index.ts`, `src/server.ts`, `package.json`
 - Each section must have ≥ 3 subsections with distinct, specific objectives
 - One section must be trend-focused (recent releases, changelog)
 - At least one section must suggest including a Mermaid architecture diagram
@@ -551,7 +553,7 @@ Every field is required. Do not omit any field. Do not add fields that aren't li
 
 - Read the actual source files in `snapshot_path`. Do not make up what the code does.
 - Use `metadata.key_paths` from `artifact.json` to know which files to prioritize reading.
-- Every `bodyKo` must discuss real code: specific file names, function names, data structures, call flows. **Exception: `sub-1-1` is a project overview** — it discusses the project at a high level (what it is, goals, capabilities, getting started) without diving into specific code paths. See the mandatory `sub-1-1` override rule in the section plan design guidelines.
+- Every `bodyKo` must discuss real code: specific file names, function names, data structures, call flows. No exceptions — `sub-1-1` is a normal subsection and must also analyze real code.
 - Build section evidence from `sourcePaths`, including synthetic snapshot artifacts under `__devport__/trends/*` and `__devport__/official-docs/*`.
 - Trend sections should reference releases/tags/changelog artifacts and explain the movement in beginner-friendly language.
 - Sections should cover distinct aspects of the codebase. For a large repo, split aggressively — do not cram everything into 6 sections. Examples of distinct sections:
@@ -678,7 +680,7 @@ CLI 진입점은 `cmd/cmd.go`의 `NewCLI()` 함수입니다. 이 함수는 cobra
 
 | 섹션 유형 | 반드시 포함해야 하는 내용 |
 |-----------|--------------------------|
-| **sub-1-1 프로젝트 개요** | 프로젝트가 무엇인지, 해결하는 문제, 핵심 목표와 기능, 설치·실행 방법, 위키 전체 구조 안내. 코드 분석 금지 — README/TL;DR 수준으로 작성합니다 |
+| **`overviewKo` (plan 필드)** | 프로젝트가 무엇인지, 해결하는 문제, 핵심 목표와 기능, 설치·실행 방법, 위키 전체 구조 안내. 코드 분석 금지 — README/TL;DR 수준으로 작성합니다. 최소 3,000자 |
 | **입문자 빠른 시작** | 설치·실행 명령, 디렉토리 구조 트리, 진입점 파일 경로, Mermaid 아키텍처 다이어그램을 포함합니다 |
 | **실행 아키텍처** | 호출 체인(진입 → 라우팅 → 처리 → 응답), 각 계층의 대표 파일과 함수, 시퀀스 다이어그램을 포함합니다 |
 | **핵심 기능 구현** | 데이터 스키마/계약 정의, 변환 함수 시그니처, 상태 머신이 있으면 상태 전이도를 포함합니다 |

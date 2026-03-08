@@ -1,23 +1,40 @@
 # portki (포트키)
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/@devport-kr/portki"><img src="https://img.shields.io/npm/v/@devport-kr/portki?style=for-the-badge" alt="NPM version"></a>
-  <a href="https://github.com/devport-kr/portki/releases"><img src="https://img.shields.io/github/v/release/devport-kr/portki?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/@devport-kr/portki?style=for-the-badge" alt="Node.js version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
-</p>
+<div align="center">
 
-**portki**는 **ports** + **wiki** 의 합성어로 ['포트키(Portkey)'](https://en.wikipedia.org/wiki/Magical_objects_in_Harry_Potter#Portkeys)처럼 순간이동해 다양한 AI 프로젝트를 만날 수 있는 Agent 입니다. [devport](https://devport.kr)의 [ports](https://devport.kr/ports)에 있는 모든 위키를 책임지고 있습니다.
+[![NPM version](https://img.shields.io/npm/v/@devport-kr/portki?style=flat-square)](https://www.npmjs.com/package/@devport-kr/portki) [![Node.js version](https://img.shields.io/badge/Node.js-20%2B-brightgreen?style=flat-square)](https://nodejs.org) [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 
-## 주요 기능
+ ###  **portki**는 **ports** + **wiki** 의 합성어로 ['포트키(Portkey)'](https://en.wikipedia.org/wiki/Magical_objects_in_Harry_Potter#Portkeys)처럼 순간이동해 다양한 AI 프로젝트를 만날 수 있는 Agent 입니다. 
 
-- **GitHub 저장소 스냅샷 수집**: 저장소의 코드를 분석하기 위해 특정 커밋 시점의 스냅샷을 다운로드합니다.
-- **AI 에이전트 인터페이스**: AI가 코드베이스를 직접 읽고, 분석하여 위키 문서를 작성할 수 있도록 기계적인 파이프라인(스냅샷, 변경 감지, 검증, 세션 기록, Markdown 출력 등)을 제공합니다.
-- **청크 기반 생성 (Chunked Generation)**: 저장소의 규모가 클 경우, 문서를 여러 섹션으로 나누고 각 섹션 단위로 상세한 문서를 생성 및 검증한 뒤 로컬 세션 상태에 반영합니다.
-- **순수 Markdown 출력**: 최종 위키를 데이터베이스가 아니라 `README.md`와 섹션별 `.md` 파일로 출력합니다.
-- **증분 업데이트 (Incremental Update)**: 전체 코드를 매번 다시 분석하지 않고, 마지막 위키 생성 커밋 이후 변경된 파일과 영향을 받는 섹션만 추적하여 위키를 효율적으로 갱신합니다.
-- **AI 에이전트 원클릭 통합**: Claude Code, Codex, Gemini CLI에서 한 줄의 명령으로 위키를 생성할 수 있습니다.
+ **[devport](https://devport.kr)의 [ports](https://devport.kr/ports)에 있는 모든 위키를 책임지고 있습니다.**
+ 
+</div>
+
+
+
+
+### 🤖 실행 지원 환경 (Supported CLI Environments)
+
+portki는 대표적인 CLI 기반 AI 에이전트들과 완벽하게 통합됩니다. 각 환경에 맞춘 최적화된 어댑터를 통해 위키 생성 파이프라인을 쉽게 구축할 수 있습니다.
+
+<div align="center" style="display: flex; justify-content: center; gap: 40px; margin: 20px 0;">
+  <a href="https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview" style="text-decoration:none; color:inherit; display:inline-flex; align-items:center; gap:8px;">
+    <img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude-color.svg" width="28" height="28" alt="Claude Code" />
+    <b>Claude Code</b>
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://platform.openai.com" style="text-decoration:none; color:inherit; display:inline-flex; align-items:center; gap:8px;">
+    <img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/codex-color.svg" width="28" height="28" alt="OpenAI Codex" />
+    <b>Codex</b>
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://ai.google.dev/" style="text-decoration:none; color:inherit; display:inline-flex; align-items:center; gap:8px;">
+    <img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/gemini-color.svg" width="28" height="28" alt="Gemini CLI" />
+    <b>Gemini CLI</b>
+  </a>
+</div>
+
 
 ---
 
@@ -39,7 +56,6 @@ portki doctor
 
 ## 🚀 빠른 시작 (Quick Start)
 
-portki는 주요 3사의 Coding CLI들과 완벽하게 연동됩니다. 한 번의 어댑터 설치로 에이전트 내에서 직접 명령어를 실행할 수 있습니다.
 
 > 💡 **안내:** 아래 명령어들에 사용된 `devport-kr/portki`는 예시 저장소입니다. 실제로 위키를 생성하고자 하는 대상 GitHub 저장소(예: `facebook/react`, `owner/repo`)로 변경하여 실행해 주세요.
 
